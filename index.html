@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Datacenter Tycoon</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main id="game-shell">
+      <section id="hud" aria-label="Company status">
+        <div class="brand">
+          <span class="mark"></span>
+          <div>
+            <h1>Datacenter Tycoon</h1>
+            <p>Prototype week 1</p>
+          </div>
+        </div>
+        <div class="metric"><span>Cash</span><strong id="cash">$0</strong></div>
+        <div class="metric"><span>Revenue</span><strong id="revenue">$0/mo</strong></div>
+        <div class="metric"><span>Debt</span><strong id="debt">$0</strong></div>
+        <div class="metric"><span>Power</span><strong id="power">0 MW</strong></div>
+        <div class="metric"><span>Goodwill</span><strong id="goodwill">100%</strong></div>
+        <div class="metric month-card"><span>Month</span><strong id="month">1</strong><button id="next-month-hud">Run next month</button></div>
+      </section>
+
+      <section id="workspace">
+        <div id="canvas-wrap" aria-label="Regional build map">
+          <div id="game-stage"></div>
+        </div>
+
+        <aside id="control-panel" aria-label="Tycoon controls">
+          <nav id="tabs">
+            <button class="tab active" data-tab="build">Build</button>
+            <button class="tab" data-tab="chips">Chips</button>
+            <button class="tab" data-tab="staff">Staff</button>
+            <button class="tab" data-tab="contracts">Contracts</button>
+            <button class="tab" data-tab="finance">Finance</button>
+            <button class="tab" data-tab="reports">Reports</button>
+          </nav>
+
+          <section class="panel active" id="panel-build">
+            <h2>Build Site</h2>
+            <p id="selected-site">Select a map parcel.</p>
+            <div class="button-grid">
+              <button id="build-small">Small DC<br><span>$160k, 8 MW</span></button>
+              <button id="build-medium">Modular DC<br><span>$420k, 24 MW</span></button>
+              <button id="build-large">Hyperscale<br><span>$950k, 58 MW</span></button>
+            </div>
+            <button id="upgrade-site" class="wide">Upgrade selected site</button>
+            <div class="readout">
+              <span>Capacity</span><strong id="capacity">0 PFLOPS</strong>
+              <span>Used</span><strong id="used-capacity">0 PFLOPS</strong>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-chips">
+            <h2>CPU Lab</h2>
+            <label>Clock speed <strong id="clock-label">3.2 GHz</strong>
+              <input id="clock" type="range" min="1.6" max="6.0" value="3.2" step="0.1">
+            </label>
+            <label>Core voltage <strong id="voltage-label">0.92 V</strong>
+              <input id="voltage" type="range" min="0.65" max="1.25" value="0.92" step="0.01">
+            </label>
+            <label>Cache <strong id="cache-label">32 MB</strong>
+              <input id="cache" type="range" min="8" max="128" value="32" step="4">
+            </label>
+            <label>Cores <strong id="cores-label">16</strong>
+              <input id="cores" type="range" min="4" max="96" value="16" step="4">
+            </label>
+            <label>Memory channels <strong id="memory-label">8</strong>
+              <input id="memory" type="range" min="2" max="16" value="8" step="2">
+            </label>
+            <label>Process node <strong id="node-label">7 nm</strong>
+              <select id="node">
+                <option value="14">14 nm</option>
+                <option value="7" selected>7 nm</option>
+                <option value="5">5 nm</option>
+                <option value="3">3 nm</option>
+              </select>
+            </label>
+            <label class="check"><input id="ai-accel" type="checkbox"> AI accelerator</label>
+            <label class="check"><input id="ecc" type="checkbox" checked> ECC reliability</label>
+            <button id="prototype-chip" class="wide">Start chip development</button>
+            <div class="readout">
+              <span>Active chip</span><strong id="active-chip">Gen 0</strong>
+              <span>Estimate</span><strong id="chip-perf">0 PFLOPS</strong>
+              <span>Outcome range</span><strong id="chip-range">0-0 PFLOPS</strong>
+              <span>Node power</span><strong id="chip-heat">0 MW</strong>
+              <span>Reliability</span><strong id="chip-reliability">0%</strong>
+              <span>NRE budget</span><strong id="chip-cost">$0</strong>
+              <span>Timeline</span><strong id="chip-time">0 mo</strong>
+              <span>R&D status</span><strong id="chip-status">Idle</strong>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-staff">
+            <h2>Hiring</h2>
+            <div class="button-grid">
+              <button id="hire-research">Chip researcher<br><span>$18k/mo</span></button>
+              <button id="hire-ops">Ops manager<br><span>$14k/mo</span></button>
+              <button id="hire-community">Community liaison<br><span>$12k/mo</span></button>
+              <button id="hire-sales">Contract sales<br><span>$15k/mo</span></button>
+            </div>
+            <div class="readout">
+              <span>Researchers</span><strong id="researchers">0</strong>
+              <span>Ops</span><strong id="ops">0</strong>
+              <span>Community</span><strong id="community">0</strong>
+              <span>Sales</span><strong id="sales">0</strong>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-contracts">
+            <h2>Contracts</h2>
+            <div class="subtabs" aria-label="Contract categories">
+              <button class="subtab active" data-contract-page="compute">Compute</button>
+              <button class="subtab" data-contract-page="silicon">Custom Silicon</button>
+            </div>
+            <div class="contract-page active" id="contracts-compute">
+            <div class="readout contract-capacity">
+              <span>Available compute</span><strong id="available-compute">0 PFLOPS</strong>
+              <span>Total capacity</span><strong id="contract-capacity">0 PFLOPS</strong>
+            </div>
+            <div id="contract-list"></div>
+            </div>
+            <div class="contract-page" id="contracts-silicon">
+              <p id="silicon-brief">Design an application-specific chip that clears a customer's minimum performance threshold.</p>
+              <div class="readout contract-capacity">
+                <span>Design estimate</span><strong id="silicon-design-estimate">0 PFLOPS</strong>
+                <span>Expected outcome</span><strong id="silicon-outcome-range">0-0 PFLOPS</strong>
+                <span>Success odds</span><strong id="silicon-success-odds">0%</strong>
+                <span>Engineers</span><strong id="silicon-engineers">0</strong>
+              </div>
+              <div id="silicon-contract-list"></div>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-finance">
+            <h2>Finance</h2>
+            <div class="button-grid">
+              <button id="loan-small">Take $250k loan<br><span>$9k/mo</span></button>
+              <button id="loan-large">Take $1M loan<br><span>$42k/mo</span></button>
+            </div>
+            <button id="pay-loan" class="wide">Pay $100k toward loans</button>
+            <div class="readout">
+              <span>Payroll</span><strong id="payroll">$0/mo</strong>
+              <span>Loan payments</span><strong id="loan-payments">$0/mo</strong>
+              <span>Chip R&D</span><strong id="chip-rd">$0/mo</strong>
+              <span>Risk</span><strong id="risk">Low</strong>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-reports">
+            <h2>Financials</h2>
+            <canvas id="finance-chart" width="720" height="320" aria-label="Financial history chart"></canvas>
+            <div class="readout">
+              <span>Cash runway</span><strong id="runway">Stable</strong>
+              <span>Monthly burn</span><strong id="monthly-burn">$0</strong>
+              <span>Net income</span><strong id="net-income">$0/mo</strong>
+              <span>Enterprise value</span><strong id="valuation">$0</strong>
+            </div>
+          </section>
+        </aside>
+      </section>
+
+      <section id="event-log" aria-label="Event log"></section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+    <script src="src/game.js"></script>
+  </body>
+</html>
