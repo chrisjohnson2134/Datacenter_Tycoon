@@ -37,6 +37,7 @@
             <button class="tab" data-tab="contracts">Contracts</button>
             <button class="tab" data-tab="finance">Finance</button>
             <button class="tab" data-tab="reports">Reports</button>
+            <button class="tab" data-tab="research">Research</button>
           </nav>
 
           <section class="panel active" id="panel-build">
@@ -95,13 +96,14 @@
           </section>
 
           <section class="panel" id="panel-staff">
-            <h2>Hiring</h2>
+            <h2>Hiring & Settings</h2>
             <div class="button-grid">
               <button id="hire-research">Chip researcher<br><span>$18k/mo</span></button>
               <button id="hire-ops">Ops manager<br><span>$14k/mo</span></button>
               <button id="hire-community">Community liaison<br><span>$12k/mo</span></button>
               <button id="hire-sales">Contract sales<br><span>$15k/mo</span></button>
             </div>
+
             <div class="readout">
               <span>Researchers</span><strong id="researchers">0</strong>
               <span>Ops</span><strong id="ops">0</strong>
@@ -116,6 +118,11 @@
               <button class="subtab active" data-contract-page="compute">Compute</button>
               <button class="subtab" data-contract-page="silicon">Custom Silicon</button>
             </div>
+
+            <label class="check"><input id="contract-rule-toggle" type="checkbox"> Use revenue per PFLOP rule (lower cost = better)</label>
+            <label class="check"><input id="auto-select-contract-toggle" type="checkbox" checked> Auto-select best contract</label>
+            <p id="contract-rule-label" style="margin-top:8px;font-size:12px;color:var(--muted);">Rule: Revenue per PFLOP (lower cost = better)</p>
+
             <div class="contract-page active" id="contracts-compute">
             <div class="readout contract-capacity">
               <span>Available compute</span><strong id="available-compute">0 PFLOPS</strong>
@@ -158,6 +165,18 @@
               <span>Monthly burn</span><strong id="monthly-burn">$0</strong>
               <span>Net income</span><strong id="net-income">$0/mo</strong>
               <span>Enterprise value</span><strong id="valuation">$0</strong>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-research">
+            <h2>Research & Development</h2>
+            <p class="tech-subtitle">Assign researchers to technologies. Research time is proportional to tech complexity divided by researcher count.</p>
+
+            <div id="research-tree" class="tech-list"></div>
+
+            <div class="readout">
+              <span>Unlocked techs</span><strong id="tech-count">0</strong>
+              <span>R&D efficiency</span><strong id="rd-efficiency">0%</strong>
             </div>
           </section>
         </aside>
