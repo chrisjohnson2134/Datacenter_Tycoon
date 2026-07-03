@@ -24,3 +24,5 @@ If port `5173` is already in use, pick another port:
 ```powershell
 $env:PORT=5174; npm.cmd start
 ```
+
+<img width="897" height="542" alt="image" src="https://github.com/user-attachments/assets/1346d660-a43a-43be-9062-f078f08b97a5" />
