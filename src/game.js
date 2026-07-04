@@ -19,6 +19,9 @@ const state = {
     node: 7,
     ai: false,
     ecc: true,
+    optimizedPower: false, // power_grid: on-chip power delivery network, +reliability
+    cache3d: false,        // 3d_cache: vertically stacked cache, +cache perf, +heat
+    optical: false,        // optical_interconnect: photonic links, -heat
     perf: 0,
     heat: 0,
     reliability: 0,
@@ -33,9 +36,29 @@ const state = {
     reliability: 91
   },
   chipProject: null,
+  designExperience: 0, // completed chip programs; tightens the design estimator
   unlockedTechs: [],
   researchAssignments: {}, // { techId: number of researchers }
-  wholesaleSales: { attempts: 0, successRate: 0.65, revenueMultiplier: 0.7 },
+  techProgress: {}, // { techId: researcher-months completed; retained when researchers are pulled off }
+  licensing: {}, // { techId: { enabled, price } }
+  licenseIncome: 0,
+  chipCatalog: [
+    { name: "Gen 0", perf: 42, heat: 2.4, reliability: 91, clock: 3.2, cores: 16, cache: 32, memory: 8, node: 7, ai: false, ecc: true }
+  ],
+  siliconOffers: [
+    { id: "sil_seed_1", company: "Aurora Motors", application: "autonomous driving perception", requirement: { type: "benchmark", benchmark: "AI inference", minScore: 52 }, pay: 560000, penalty: 120000, goodwill: 1, cacheNeed: 0.62, memoryNeed: 0.48, aiNeed: 0.7, requestedTech: "thermal_analysis", deadline: 72, expiresIn: 5 },
+    { id: "sil_seed_2", company: "PlayForge Entertainment", application: "next-gen console gaming", requirement: { type: "benchmark", benchmark: "Gaming", minScore: 58 }, pay: 640000, penalty: 140000, goodwill: 2, cacheNeed: 0.7, memoryNeed: 0.5, aiNeed: 0.3, requestedTech: null, deadline: 84, expiresIn: 6 }
+  ],
+  activeSilicon: [],
+  researchQueue: [], // ordered techIds; idle researchers auto-start the first available entry
+  selectedTech: null, // tech shown in the research detail box
+  rivals: [
+    // speed = researcher-months of progress per month, i.e. team size
+    { id: "helios", name: "Helios Microsystems", researchers: 18, speed: 18, completed: ["cloud_modeling", "thermal_analysis"], progress: { high_fidelity_sim: 130 }, current: "high_fidelity_sim" },
+    { id: "quanta", name: "Quanta Forge Labs", researchers: 26, speed: 26, completed: ["cloud_modeling", "high_fidelity_sim"], progress: { monte_carlo_analysis: 190 }, current: "monte_carlo_analysis" },
+    { id: "vector", name: "Vector Photonics", researchers: 14, speed: 14, completed: ["legacy_silicon"], progress: { fpga_prototyping: 150 }, current: "fpga_prototyping" }
+  ],
+  wholesale: { price: 950, sold: 0, revenue: 0 }, // on-demand compute: player-set $/PFLOP per month
   contractRule: "revenue_per_pflop", // Options: revenue_per_pflop (default), max_revenue, most_profitable
   staff: {
     researchers: 1,
@@ -70,37 +93,201 @@ let contractDeck = [
   { name: "Streaming Cache Region", cap: 66, pay: 85000, months: 10, goodwill: -1 }
 ];
 
-let siliconContractDeck = [
-  { name: "Warehouse Vision ASIC", application: "low-latency image classification", minPerf: 72, pay: 420000, penalty: 95000, goodwill: 1, cacheNeed: 0.62, memoryNeed: 0.48, aiNeed: 0.7 },
-  { name: "Bioinformatics Accelerator", application: "genome alignment batches", minPerf: 96, pay: 580000, penalty: 125000, goodwill: 2, cacheNeed: 0.42, memoryNeed: 0.82, aiNeed: 0.25 },
-  { name: "Inference Edge Module", application: "compact LLM inference", minPerf: 128, pay: 760000, penalty: 170000, goodwill: -1, cacheNeed: 0.76, memoryNeed: 0.72, aiNeed: 0.9 }
+const siliconCompanyPool = [
+  ["Aurora Motors", "autonomous driving perception"],
+  ["PlayForge Entertainment", "next-gen console gaming"],
+  ["Helix Biosystems", "genome alignment batches"],
+  ["Northwind Cloud", "dense virtualization hosts"],
+  ["Sentinel Defense", "radar signal processing"],
+  ["Cascade Telecom", "packet inspection at line rate"],
+  ["Ionia Robotics", "factory motion planning"],
+  ["Vantage Capital", "microsecond risk scoring"],
+  ["Prism Studios", "render farm acceleration"]
 ];
 
+const benchmarkNames = ["Gaming", "Virtual machines", "AI inference", "Databases", "Scientific HPC", "Video rendering"];
+
+function requirementLabel(requirement) {
+  return requirement.type === "benchmark"
+    ? `${requirement.benchmark} benchmark ≥ ${requirement.minScore}`
+    : `≥ ${requirement.minPerf} PFLOPS/node`;
+}
+
+// baseDuration is in researcher-months (person-months): total effort the
+// tech takes, calibrated against real-world EDA/silicon program sizes
+// (e.g. basic simulation tools ≈ 10-20 engineers × 1 year ≈ 180 pm;
+// quantum-inspired simulation ≈ large research teams over 10+ years ≈ 30,000 pm).
+// Two researchers assigned finish in half the calendar time.
+// requires lists prerequisite tech ids — a tech cannot be researched until
+// every prerequisite is unlocked.
+//
+// design (optional): only on techs that are physical/architectural features
+// of the chip — they change the CPU Lab controls when unlocked. Simulation
+// and design-software techs deliberately have no `design` field; they only
+// tighten estimates (simAccuracyBonus) and speed up programs (timeBonus).
+//   { type: "slider", target, max }        widens a slider's range
+//   { type: "node", value, label }         adds a process-node option
+//   { type: "checkbox", key, label }        adds an on-chip feature toggle (state.chip[key])
 const techTree = [
-  // Common technologies (faster research)
-  { id: "cloud_modeling", name: "Cloud Simulation Model", category: "common", unlockAfter: 1, baseDuration: 2, timeBonus: 0.15, desc: "Basic cloud simulation tools for initial estimates" },
-  { id: "legacy_silicon", name: "Legacy Silicon Library", category: "common", unlockAfter: 2, baseDuration: 3, timeBonus: 0.08, desc: "Reference designs from previous generations" },
+  // Roots — foundational tooling (10-20 engineers × ~1 year)
+  { id: "cloud_modeling", name: "Cloud Simulation Model", category: "common", requires: [], baseDuration: 180, timeBonus: 0.15, desc: "Basic cloud simulation tools for initial estimates" },
+  { id: "legacy_silicon", name: "Legacy Silicon Library", category: "common", requires: [], baseDuration: 120, timeBonus: 0.08, desc: "Reference designs from previous generations" },
 
-  // Advanced technologies (moderate duration)
-  { id: "finfet_model", name: "FinFET Modeling", category: "advanced", unlockAfter: 3, baseDuration: 5, timeBonus: 0.2, desc: "Advanced transistor modeling for better predictions" },
-  { id: "thermal_analysis", name: "Thermal Analysis Suite", category: "advanced", unlockAfter: 4, baseDuration: 4, timeBonus: 0.12, desc: "Improved thermal simulation reduces heat overruns" },
-  { id: "statistical_timing", name: "Statistical Timing Analysis", category: "advanced", unlockAfter: 5, baseDuration: 4, timeBonus: 0.18, desc: "Better timing analysis reduces voltage headroom issues" },
-  { id: "power_grid", name: "Power Grid Optimization", category: "advanced", unlockAfter: 4, baseDuration: 3, timeBonus: 0.1, desc: "Optimized power delivery improves reliability" },
+  // Second tier — serious engineering programs (20-50 engineers × ~2 years)
+  { id: "thermal_analysis", name: "Thermal Analysis Suite", category: "advanced", requires: ["cloud_modeling"], baseDuration: 600, timeBonus: 0.12, desc: "Improved thermal simulation reduces heat overruns" },
+  { id: "power_grid", name: "Power Grid Optimization", category: "advanced", requires: ["legacy_silicon"], baseDuration: 480, timeBonus: 0.1, desc: "Optimized power delivery improves reliability", design: [{ type: "checkbox", key: "optimizedPower", label: "Optimized power delivery" }] },
+  { id: "statistical_timing", name: "Statistical Timing Analysis", category: "advanced", requires: ["legacy_silicon"], baseDuration: 720, timeBonus: 0.18, desc: "Better timing analysis reduces voltage headroom issues" },
+  { id: "high_fidelity_sim", name: "High-Fidelity Simulator", category: "simulation", requires: ["cloud_modeling"], baseDuration: 840, timeBonus: 0.25, desc: "More accurate pre-design simulation" },
+  { id: "fpga_prototyping", name: "FPGA Prototyping Platform", category: "hardware", requires: ["legacy_silicon"], baseDuration: 900, timeBonus: 0.3, desc: "Hardware-assisted design verification" },
 
-  // Experimental technologies (longer research)
-  { id: "ml_prediction", name: "ML Performance Predictor", category: "experimental", unlockAfter: 7, baseDuration: 8, timeBonus: 0.35, desc: "Machine learning model for highly accurate predictions" },
-  { id: "quantum_sim", name: "Quantum-Inspired Simulation", category: "experimental", unlockAfter: 10, baseDuration: 12, timeBonus: 0.5, desc: "Cutting-edge simulation reduces design risk dramatically" },
-  { id: "optical_interconnect", name: "Optical Interconnect Design", category: "experimental", unlockAfter: 8, baseDuration: 6, timeBonus: 0.25, desc: "Reduces power consumption and heat generation" },
+  // Third tier — multi-year programs building on earlier work (40-60 engineers × ~3 years)
+  { id: "monte_carlo_analysis", name: "Monte Carlo Analysis", category: "simulation", requires: ["high_fidelity_sim"], baseDuration: 1080, timeBonus: 0.22, desc: "Statistical variation analysis improves yield predictions" },
+  { id: "multi_corner_analysis", name: "Multi-Corner Analysis", category: "simulation", requires: ["monte_carlo_analysis", "statistical_timing"], baseDuration: 960, timeBonus: 0.18, desc: "Process variation analysis across operating conditions" },
+  { id: "formal_verification", name: "Formal Verification", category: "simulation", requires: ["statistical_timing", "high_fidelity_sim"], baseDuration: 1800, timeBonus: 0.28, desc: "Mathematically proves design correctness, avoiding late respins" },
+  { id: "ml_prediction", name: "ML Performance Predictor", category: "experimental", requires: ["high_fidelity_sim", "monte_carlo_analysis"], baseDuration: 2400, timeBonus: 0.35, desc: "Machine learning model for highly accurate predictions" },
+  { id: "emulation_cluster", name: "Emulation Cluster", category: "hardware", requires: ["fpga_prototyping"], baseDuration: 2700, timeBonus: 0.4, desc: "Full-chip emulation significantly reduces iterations" },
+  { id: "finfet_model", name: "FinFET Modeling", category: "advanced", requires: ["statistical_timing", "thermal_analysis"], baseDuration: 3600, timeBonus: 0.2, desc: "Advanced transistor modeling for better predictions" },
 
-  // Simulation technologies (moderate duration)
-  { id: "high_fidelity_sim", name: "High-Fidelity Simulator", category: "simulation", unlockAfter: 5, baseDuration: 7, timeBonus: 0.25, desc: "More accurate pre-design simulation" },
-  { id: "monte_carlo_analysis", name: "Monte Carlo Analysis", category: "simulation", unlockAfter: 6, baseDuration: 6, timeBonus: 0.22, desc: "Statistical variation analysis improves yield predictions" },
-  { id: "multi_corner_analysis", name: "Multi-Corner Analysis", category: "simulation", unlockAfter: 6, baseDuration: 5, timeBonus: 0.18, desc: "Process variation analysis across operating conditions" },
+  // Frontier — flagship programs (100-250 engineers × ~4 years)
+  { id: "chiplet_architecture", name: "Chiplet Architecture", category: "hardware", requires: ["finfet_model", "emulation_cluster"], baseDuration: 7200, timeBonus: 0.35, desc: "Modular multi-die designs reuse proven silicon blocks — pack far more cores", design: [{ type: "slider", target: "cores", max: 192 }] },
+  { id: "3d_cache", name: "3D Cache Integration", category: "hardware", requires: ["chiplet_architecture"], baseDuration: 9600, timeBonus: 0.4, desc: "Vertically stacked cache dies multiply on-chip memory", design: [{ type: "slider", target: "cache", max: 256 }, { type: "checkbox", key: "cache3d", label: "3D stacked cache" }] },
+  { id: "optical_interconnect", name: "Optical Interconnect Design", category: "experimental", requires: ["finfet_model"], baseDuration: 12000, timeBonus: 0.25, desc: "Reduces power consumption and heat generation", design: [{ type: "checkbox", key: "optical", label: "Optical interconnect" }] },
 
-  // Hardware accelerators (longer research)
-  { id: "fpga_prototyping", name: "FPGA Prototyping Platform", category: "hardware", unlockAfter: 6, baseDuration: 9, timeBonus: 0.3, desc: "Hardware-assisted design verification" },
-  { id: "emulation_cluster", name: "Emulation Cluster", category: "hardware", unlockAfter: 8, baseDuration: 10, timeBonus: 0.4, desc: "Full-chip emulation significantly reduces iterations" }
+  // Moonshots — decade-scale research bets (hundreds of engineers × 5-10+ years)
+  { id: "gaa_modeling", name: "Gate-All-Around Modeling", category: "experimental", requires: ["finfet_model", "formal_verification"], baseDuration: 24000, timeBonus: 0.45, desc: "Next-generation transistor structure beyond FinFET — unlocks the 2 nm node", design: [{ type: "node", value: 2, label: "2 nm" }] },
+  { id: "quantum_sim", name: "Quantum-Inspired Simulation", category: "experimental", requires: ["ml_prediction"], baseDuration: 30000, timeBonus: 0.5, desc: "Cutting-edge simulation reduces design risk dramatically" }
 ];
+
+function techById(id) {
+  return techTree.find(t => t.id === id);
+}
+
+function prereqsMet(tech, completed = state.unlockedTechs) {
+  return tech.requires.every(id => completed.includes(id));
+}
+
+function techTier(tech) {
+  if (!tech.requires.length) return 0;
+  return 1 + Math.max(...tech.requires.map(id => techTier(techById(id))));
+}
+
+function techValue(tech) {
+  // Roughly a third of the payroll it would cost to research the tech
+  // in-house ($18k per researcher-month), so licensing/acquiring is a
+  // real shortcut but never free.
+  return tech.baseDuration * 6000;
+}
+
+function rivalAskPrice(rival) {
+  let value = 160000 + rival.researchers * 60000;
+  for (const techId of rival.completed) {
+    const tech = techTree.find(t => t.id === techId);
+    if (tech) value += techValue(tech);
+  }
+  for (const techId in rival.progress) {
+    if (rival.completed.includes(techId)) continue;
+    const tech = techTree.find(t => t.id === techId);
+    if (tech) value += Math.round(techValue(tech) * Math.min(0.8, rival.progress[techId] / tech.baseDuration));
+  }
+  return Math.round(value);
+}
+
+function pickNextRivalTech(rival) {
+  const candidates = techTree.filter(t => !rival.completed.includes(t.id) && prereqsMet(t, rival.completed));
+  rival.current = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)].id : null;
+}
+
+function advanceRivals() {
+  for (const rival of state.rivals) {
+    if (!rival.current || rival.completed.includes(rival.current)) pickNextRivalTech(rival);
+    if (!rival.current) continue;
+    const tech = techTree.find(t => t.id === rival.current);
+    if (!tech) { pickNextRivalTech(rival); continue; }
+    rival.progress[rival.current] = (rival.progress[rival.current] || 0) + rival.speed;
+    if (rival.progress[rival.current] >= tech.baseDuration) {
+      rival.completed.push(rival.current);
+      log(`${rival.name} completed ${tech.name}. Their asking price just went up.`);
+      pickNextRivalTech(rival);
+    }
+  }
+}
+
+const rivalNamePool = ["Northcell Systems", "Bluewire Semiconductor", "Aster Compute", "Kestrel EDA", "Praxis Silicon", "Meridian Logic"];
+
+function spawnRival() {
+  const name = rivalNamePool[Math.floor(Math.random() * rivalNamePool.length)];
+  const roots = techTree.filter(t => !t.requires.length);
+  const completed = [roots[Math.floor(Math.random() * roots.length)].id];
+  if (Math.random() < 0.5) {
+    const second = techTree.filter(t => !completed.includes(t.id) && prereqsMet(t, completed));
+    if (second.length) completed.push(second[Math.floor(Math.random() * second.length)].id);
+  }
+  const available = techTree.filter(t => !completed.includes(t.id) && prereqsMet(t, completed));
+  const startTech = available[Math.floor(Math.random() * available.length)];
+  const teamSize = 8 + Math.floor(Math.random() * 20);
+  state.rivals.push({
+    id: `rival_${Date.now()}`,
+    name,
+    researchers: teamSize,
+    speed: teamSize,
+    completed,
+    progress: { [startTech.id]: Math.floor(Math.random() * startTech.baseDuration * 0.4) },
+    current: startTech.id
+  });
+  log(`${name} just opened a research lab in the region.`);
+}
+
+function acquireRival(rivalId) {
+  const index = state.rivals.findIndex(r => r.id === rivalId);
+  if (index < 0) return;
+  const rival = state.rivals[index];
+  const price = rivalAskPrice(rival);
+  if (state.cash < price) return log(`Acquiring ${rival.name} needs ${money.format(price)}.`);
+  state.cash -= price;
+  const gained = [];
+  for (const techId of rival.completed) {
+    if (!state.unlockedTechs.includes(techId)) {
+      state.unlockedTechs.push(techId);
+      const tech = techTree.find(t => t.id === techId);
+      if (tech) gained.push(tech.name);
+    }
+  }
+  for (const techId in rival.progress) {
+    if (state.unlockedTechs.includes(techId)) continue;
+    state.techProgress[techId] = Math.max(state.techProgress[techId] || 0, rival.progress[techId]);
+  }
+  state.staff.researchers += rival.researchers;
+  state.rivals.splice(index, 1);
+  log(`Acquired ${rival.name} for ${money.format(price)}: gained ${gained.length ? gained.join(", ") : "their in-progress research"} and ${rival.researchers} researcher${rival.researchers > 1 ? "s" : ""}.`);
+  if (state.rivals.length < 3 && Math.random() < 0.6) spawnRival();
+  renderResearchTree();
+  updateUI();
+}
+
+function processLicensing() {
+  for (const techId in state.licensing) {
+    const lic = state.licensing[techId];
+    if (!lic.enabled || !state.unlockedTechs.includes(techId)) continue;
+    const tech = techTree.find(t => t.id === techId);
+    if (!tech) continue;
+    const fairValue = techValue(tech);
+    const ratio = clamp(fairValue / Math.max(1, lic.price), 0.1, 2.5);
+    for (const rival of state.rivals) {
+      if (rival.completed.includes(techId)) continue;
+      if (Math.random() < Math.min(0.4, 0.16 * ratio)) {
+        state.cash += lic.price;
+        state.licenseIncome += lic.price;
+        rival.completed.push(techId);
+        log(`${rival.name} licensed ${tech.name} for ${money.format(lic.price)}.`);
+      }
+    }
+    if (Math.random() < Math.min(0.2, 0.08 * ratio)) {
+      state.cash += lic.price;
+      state.licenseIncome += lic.price;
+      log(`An OEM licensed ${tech.name} for ${money.format(lic.price)}.`);
+    }
+  }
+}
 
 let gameScene;
 
@@ -408,19 +595,24 @@ function bootCanvasFallback() {
 }
 
 function computeChip() {
-  const { clock, voltage, cache, cores, memory, node, ai, ecc } = state.chip;
-  const nodeScale = { 14: 0.72, 7: 1, 5: 1.18, 3: 1.34 }[node];
-  const leakageScale = { 14: 0.7, 7: 1, 5: 1.28, 3: 1.68 }[node];
+  const { clock, voltage, cache, cores, memory, node, ai, ecc, optimizedPower, cache3d, optical } = state.chip;
+  const nodeScale = { 14: 0.72, 7: 1, 5: 1.18, 3: 1.34, 2: 1.5 }[node];
+  const leakageScale = { 14: 0.7, 7: 1, 5: 1.28, 3: 1.68, 2: 2.05 }[node];
+  // 3D stacking gives the design far more effective cache for its die area.
+  const cacheEff = cache * (cache3d ? 1.5 : 1);
   const complexity = cores / 16 + cache / 48 + memory / 8 + (ai ? 1.4 : 0) + (ecc ? 0.35 : 0);
-  const activityCap = cores * (1 + cache / 220 + memory / 32 + (ai ? 0.42 : 0));
+  const activityCap = cores * (1 + cacheEff / 220 + memory / 32 + (ai ? 0.42 : 0));
   const dynamicPower = activityCap * Math.pow(voltage / 0.9, 2) * (clock / 3.2) * 0.105;
   const leakagePower = complexity * leakageScale * Math.pow(voltage / 0.9, 1.35) * 0.36;
-  const perf = cores * clock * (1 + cache / 180) * (1 + memory / 80) * (ai ? 1.55 : 1) * nodeScale * 0.62;
-  const heat = dynamicPower + leakagePower;
+  const perf = cores * clock * (1 + cacheEff / 180) * (1 + memory / 80) * (ai ? 1.55 : 1) * nodeScale * 0.62;
+  // Stacked dies trap heat; optical interconnects cut interconnect power.
+  const heat = (dynamicPower + leakagePower) * (cache3d ? 1.14 : 1) * (optical ? 0.82 : 1);
   const voltageMargin = voltage < 0.82 + clock * 0.018 ? -9 : voltage > 1.08 ? -4 : 2;
-  const reliability = Math.max(35, Math.min(99, 90 + voltageMargin - Math.max(0, clock - 3.4) * 7 + (ecc ? 8 : -7) - (ai ? 2 : 0) - (node <= 5 ? 3 : 0)));
-  const cost = Math.round((120000 + complexity * 65000 + Math.pow(nodeScale, 2.2) * 90000) * (ai ? 1.28 : 1) * (ecc ? 1.08 : 1));
-  let baseMonths = Math.max(2, Math.ceil(2 + complexity * 1.2 + (14 / node) * 1.6 + (ai ? 1.5 : 0)));
+  const reliability = Math.max(35, Math.min(99, 90 + voltageMargin - Math.max(0, clock - 3.4) * 7 + (ecc ? 8 : -7) - (ai ? 2 : 0) - (node <= 5 ? 3 : 0) + (optimizedPower ? 6 : 0)));
+  // Mature nodes are dramatically cheaper to tape out on than leading-edge ones.
+  const nodeNre = { 14: 30000, 7: 140000, 5: 320000, 3: 700000, 2: 1200000 }[node];
+  const cost = Math.round((90000 + complexity * 65000 + nodeNre) * (ai ? 1.28 : 1) * (ecc ? 1.08 : 1) * (cache3d ? 1.2 : 1) * (optical ? 1.15 : 1));
+  let baseMonths = Math.max(10, Math.ceil((2 + complexity * 1.2 + (14 / node) * 1.6 + (ai ? 1.5 : 0)) * 5));
 
   // Apply tech time reductions based on researcher assignments and progress
   const bonuses = getResearchBonuses();
@@ -456,32 +648,32 @@ function getTotalResearchProgress() {
   return { simAccuracyBonus, timeReduction: totalTimeReduction };
 }
 
-function attemptPartialSales() {
-  const t = totals();
-  const unusedCapacity = t.capacity - t.used;
-  if (unusedCapacity <= 0) return;
+// Going market rate for on-demand compute; rises over time and with sales reach.
+function wholesaleMarketPrice() {
+  return 950 + state.month * 25 + state.staff.sales * 40;
+}
 
-  const salesCount = state.staff.sales || 1;
-  const baseSuccessChance = 0.65 + state.month * 0.02;
-  const successChance = Math.min(0.9, baseSuccessChance);
-  const attempts = Math.ceil(unusedCapacity / 10);
+// How appealing the listed price is: 1 at half the market rate or below,
+// 0 at 1.5x the market rate or above.
+function wholesaleAppeal() {
+  const market = wholesaleMarketPrice();
+  return clamp((market * 1.5 - state.wholesale.price) / market, 0, 1);
+}
 
-  for (let i = 0; i < attempts; i++) {
-    if (Math.random() > successChance) continue;
-
-    const capacityToSell = Math.min(unusedCapacity, 20 + Math.floor(Math.random() * 30));
-    const pricePerPFLOP = 850 + state.month * 50 + salesCount * 100;
-    const revenue = Math.round(capacityToSell * pricePerPFLOP);
-
-    state.cash += revenue;
-    log(`Sales team sold ${capacityToSell} PFLOPS at wholesale: ${money.format(revenue)} (${Math.floor(pricePerPFLOP / 100)} PFLOP).`);
-
-    if (state.cash < -50000) {
-      log("Warning: Cash flowing negative despite sales efforts.");
-    }
-  }
-
-  state.wholesaleSales.attempts += attempts;
+// Any unclaimed PFLOPS (capacity minus contracted use) sell without a
+// contract at the player's listed price, billed monthly like a subscription.
+// Subscribers join and churn gradually toward price-driven demand, so an
+// overpriced listing leaves flops unsold.
+function tickWholesale() {
+  const unclaimed = Math.max(0, Math.round(totals().capacity - totals().used));
+  const target = Math.round(unclaimed * wholesaleAppeal() * (0.92 + Math.random() * 0.16));
+  const previous = state.wholesale.sold;
+  const sold = clamp(Math.round(previous + (target - previous) * 0.4), 0, unclaimed);
+  state.wholesale.sold = sold;
+  state.wholesale.revenue = sold * state.wholesale.price;
+  state.cash += state.wholesale.revenue;
+  if (sold > previous) log(`${sold - previous} PFLOPS of new on-demand subscriptions at ${money.format(state.wholesale.price)}/PFLOP/mo (${sold} total).`);
+  else if (sold < previous) log(`${previous - sold} PFLOPS of on-demand subscriptions churned (${sold} remain).`);
 }
 
 function activeChipSpecs() {
@@ -494,6 +686,9 @@ function activeChipSpecs() {
     node: state.chip.node,
     ai: state.chip.ai,
     ecc: state.chip.ecc,
+    optimizedPower: state.chip.optimizedPower,
+    cache3d: state.chip.cache3d,
+    optical: state.chip.optical,
     perf: state.chip.perf,
     heat: state.chip.heat,
     reliability: state.chip.reliability
@@ -504,9 +699,26 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function designExperienceLevel() {
+  const xp = state.designExperience;
+  if (xp >= 12) return "Elite";
+  if (xp >= 8) return "Veteran";
+  if (xp >= 5) return "Seasoned";
+  if (xp >= 2) return "Junior";
+  return "Novice";
+}
+
+// Fraction of the outcome spread removed by know-how: every completed chip
+// program adds 3% (cap 30%) and simulation techs add their accuracy bonus,
+// so estimates tighten with both experience and research.
+function designEstimateAccuracy() {
+  const experienceControl = Math.min(0.3, state.designExperience * 0.03);
+  return Math.min(0.6, experienceControl + getResearchBonuses().simAccuracyBonus);
+}
+
 function designOutcomeProfile(specs = activeChipSpecs(), threshold = 0, contract = null) {
   const engineers = state.staff.researchers;
-  const nodeRisk = { 14: 0.02, 7: 0.04, 5: 0.065, 3: 0.095 }[specs.node] || 0.05;
+  const nodeRisk = { 14: 0.02, 7: 0.04, 5: 0.065, 3: 0.095, 2: 0.13 }[specs.node] || 0.05;
   const requiredVoltage = 0.69 + specs.clock * 0.06 + nodeRisk * 0.8 + (specs.ai ? 0.025 : 0);
   const voltageHeadroom = specs.voltage - requiredVoltage;
   const timingRisk = voltageHeadroom < 0
@@ -522,84 +734,67 @@ function designOutcomeProfile(specs = activeChipSpecs(), threshold = 0, contract
   const engineerControl = Math.min(0.17, engineers * 0.024);
   const eccControl = specs.ecc ? 0.025 : -0.025;
   const fitControl = (workloadFit - 0.5) * 0.12;
-  const downside = clamp(0.2 + timingRisk + thermalRisk + nodeRisk + largeDieRisk - engineerControl - eccControl - fitControl, 0.07, 0.52);
-  const upside = clamp(0.12 + Math.max(0, voltageHeadroom) * 0.08 + engineerControl * 0.72 + fitControl * 0.9 - largeDieRisk * 0.35, 0.06, 0.38);
+  const accuracy = designEstimateAccuracy();
+  const downside = clamp(0.2 + timingRisk + thermalRisk + nodeRisk + largeDieRisk - engineerControl - eccControl - fitControl, 0.07, 0.52) * (1 - accuracy);
+  const upside = clamp(0.12 + Math.max(0, voltageHeadroom) * 0.08 + engineerControl * 0.72 + fitControl * 0.9 - largeDieRisk * 0.35, 0.06, 0.38) * (1 - accuracy);
   const effectivePerf = specs.perf * (contract ? 0.88 + workloadFit * 0.24 : 1);
   const low = effectivePerf * (1 - downside);
   const high = effectivePerf * (1 + upside);
   const rawOdds = high === low ? (effectivePerf >= threshold ? 1 : 0) : (high - threshold) / (high - low);
-  const odds = clamp(rawOdds + engineerControl * 0.35 + fitControl * 0.45 - Math.max(0, -voltageHeadroom) * 0.3, 0.03, 0.97);
+  const techRequestBonus = contract && contract.requestedTech && state.unlockedTechs.includes(contract.requestedTech) ? 0.06 : 0;
+  const odds = clamp(rawOdds + engineerControl * 0.35 + fitControl * 0.45 + techRequestBonus - Math.max(0, -voltageHeadroom) * 0.3, 0.03, 0.97);
   return { low, high, odds, effectivePerf, workloadFit, voltageHeadroom };
 }
 function getResearchBonuses() {
   // Calculate simulation accuracy bonus from unlocked simulation techs
-  const simulationTechs = ["high_fidelity_sim", "monte_carlo_analysis", "multi_corner_analysis"];
+  const simulationTechs = ["high_fidelity_sim", "monte_carlo_analysis", "multi_corner_analysis", "formal_verification"];
   let simAccuracyBonus = 0;
   for (const techId of simulationTechs) {
     if (state.unlockedTechs.includes(techId)) {
       if (techId === "high_fidelity_sim") simAccuracyBonus += 0.12;
       else if (techId === "monte_carlo_analysis") simAccuracyBonus += 0.1;
       else if (techId === "multi_corner_analysis") simAccuracyBonus += 0.08;
+      else if (techId === "formal_verification") simAccuracyBonus += 0.1;
     }
   }
 
-  // Calculate time reduction from unlocked techs that have timeBonus
+  // Calculate time reduction from unlocked techs that have timeBonus.
+  // Capped so a fully researched tree still leaves chip programs multi-year.
   let totalTimeReduction = 0;
   for (const techId of state.unlockedTechs) {
     const tech = techTree.find(t => t.id === techId);
     if (tech && tech.timeBonus > 0) totalTimeReduction += tech.timeBonus;
   }
 
-  return { simAccuracyBonus, timeReduction: totalTimeReduction };
+  return { simAccuracyBonus, timeReduction: Math.min(0.7, totalTimeReduction) };
 }
 
-// Get current research progress for each unlocked tech (0-1 = not started to complete)
-function getResearchProgress(techId) {
-  const assigned = state.researchAssignments[techId] || 0;
-  if (assigned <= 0) return { progress: 0, monthsLeft: null };
-
-  const tech = techTree.find(t => t.id === techId);
-  if (!tech) return { progress: 0, monthsLeft: null };
-
-  // Research speed: more researchers = faster completion
-  // Each researcher completes 1 month of work per month
-  // Duration is baseDuration / (assigned researchers)
-  const durationWithStaff = Math.ceil(tech.baseDuration / assigned);
-
-  // Track how much progress has been made (in months worked)
-  let totalProgress = state.techProgress[techId] || 0;
-
-  return {
-    tech,
-    assigned,
-    totalMonths: durationWithStaff,
-    progress: totalProgress,
-    remaining: Math.max(0, durationWithStaff - totalProgress)
-  };
+function totalAssignedResearchers() {
+  let total = 0;
+  for (const techId in state.researchAssignments) {
+    if (!state.unlockedTechs.includes(techId)) total += state.researchAssignments[techId] || 0;
+  }
+  return total;
 }
 
 function computeResearchProgress() {
-  // Each month, add research work for each assigned researcher
+  // Each assigned researcher contributes one researcher-month of work per month.
+  // Progress accumulates against the tech's baseDuration and is never lost.
   for (const techId in state.researchAssignments) {
     const count = state.researchAssignments[techId];
-    if (count > 0 && !state.unlockedTechs.includes(techId)) {
-      let progress = state.techProgress[techId] || 0;
-
-      // Find the tech to get its duration
-      const tech = techTree.find(t => t.id === techId);
-      if (tech) {
-        const totalRequired = Math.ceil(tech.baseDuration / count);
-        progress += 1; // One month of work per researcher
-
-        if (progress >= totalRequired) {
-          state.unlockedTechs.push(techId);
-          log(`Research complete: ${tech.name}. You may now use its benefits.`);
-        }
-
-        state.techProgress[techId] = progress;
-      }
+    if (count <= 0 || state.unlockedTechs.includes(techId)) continue;
+    const tech = techTree.find(t => t.id === techId);
+    if (!tech) continue;
+    const progress = (state.techProgress[techId] || 0) + count;
+    state.techProgress[techId] = progress;
+    if (progress >= tech.baseDuration) {
+      state.unlockedTechs.push(techId);
+      state.researchAssignments[techId] = 0;
+      state.licensing[techId] = state.licensing[techId] || { enabled: false, price: techValue(tech) };
+      log(`Research complete: ${tech.name}. Researchers on the project are now idle.`);
     }
   }
+  processResearchQueue();
 }
 
 function rollDesignedPerformance(specs, contract = null) {
@@ -734,41 +929,38 @@ function prototypeChip() {
   updateUI();
 }
 
-function acceptSiliconContract(index) {
-  computeChip();
-  if (state.chipProject) return log("Finish the active chip program before signing a custom silicon deal.");
-  const contract = siliconContractDeck[index];
-  const upfront = Math.round(state.chip.cost * 0.18);
-  if (state.cash < upfront) return log(`Starting the custom silicon program needs ${money.format(upfront)} up front.`);
-  state.cash -= upfront;
-  state.chipProject = {
-    name: contract.name,
-    monthsTotal: state.chip.months,
-    monthsLeft: state.chip.months,
-    monthlyCost: Math.max(10000, Math.round((state.chip.cost - upfront) / state.chip.months)),
-    spent: upfront,
-    type: "customer",
-    contract: { ...contract },
-    specs: activeChipSpecs()
-  };
-  siliconContractDeck.splice(index, 1);
-  refreshSiliconContracts();
-  log(`${contract.name} signed. Minimum target: ${contract.minPerf} PFLOPS/node.`);
-  updateUI();
+const SIGNING_COSTS = { researchers: 24000, ops: 18000, community: 16000, sales: 20000 };
+const STAFF_LABELS = {
+  researchers: "chip researcher",
+  ops: "ops manager",
+  community: "community liaison",
+  sales: "contract sales lead"
+};
+
+function hireQty() {
+  const slider = document.querySelector("#hire-qty");
+  return slider ? Math.max(1, Math.floor(Number(slider.value) || 1)) : 1;
 }
 
-function hire(role) {
-  const labels = {
-    researchers: "chip researcher",
-    ops: "ops manager",
-    community: "community liaison",
-    sales: "contract sales lead"
-  };
-  const signingCost = { researchers: 24000, ops: 18000, community: 16000, sales: 20000 }[role];
-  if (state.cash < signingCost) return log(`Hiring a ${labels[role]} needs ${money.format(signingCost)}.`);
-  state.cash -= signingCost;
-  state.staff[role] += 1;
-  log(`Hired a ${labels[role]}.`);
+function renderHireCosts() {
+  const qty = hireQty();
+  const label = document.querySelector("#hire-qty-label");
+  if (label) label.textContent = qty;
+  document.querySelectorAll(".hire-cost").forEach(span => {
+    const total = SIGNING_COSTS[span.dataset.role] * qty;
+    span.textContent = qty > 1 ? `${money.format(total)} (×${qty})` : money.format(total);
+  });
+}
+
+function hire(role, count = 1) {
+  const qty = Math.max(1, Math.floor(count));
+  const label = STAFF_LABELS[role];
+  const total = SIGNING_COSTS[role] * qty;
+  const plural = qty > 1 ? "s" : "";
+  if (state.cash < total) return log(`Hiring ${qty} ${label}${plural} needs ${money.format(total)}.`);
+  state.cash -= total;
+  state.staff[role] += qty;
+  log(`Hired ${qty} ${label}${plural} for ${money.format(total)}.`);
   refreshContracts();
   updateUI();
 }
@@ -826,31 +1018,89 @@ function assignResearchersToTech(techId) {
   const tech = techTree.find(t => t.id === techId);
   if (!tech) return;
 
-  // Check if tech is already unlocked
   if (state.unlockedTechs.includes(techId)) {
     return log(`${tech.name} is already researched.`);
   }
 
-  // Check month requirement
-  if (state.month < tech.unlockAfter) {
-    return log(`Research on ${tech.name} will be available in month ${tech.unlockAfter}.`);
+  if (!prereqsMet(tech)) {
+    const missing = tech.requires.filter(id => !state.unlockedTechs.includes(id)).map(id => techById(id).name).join(", ");
+    return log(`${tech.name} requires ${missing} first. Queue it to start automatically when ready.`);
   }
 
-  const assigned = state.researchAssignments[techId] || 0;
-  const currentResearchers = state.staff.researchers;
-
-  // Can't assign more researchers than we have
-  if (assigned >= currentResearchers) {
-    return log(`You only have ${currentResearchers} researcher${currentResearchers > 1 ? 's' : ''}.`);
+  const idle = state.staff.researchers - totalAssignedResearchers();
+  if (idle <= 0) {
+    return log("All researchers are assigned. Pull one off another project or hire more.");
   }
 
-  // Increment assignment by 1
-  const newCount = assigned + 1;
+  const newCount = (state.researchAssignments[techId] || 0) + 1;
   state.researchAssignments[techId] = newCount;
 
-  const duration = Math.ceil(tech.baseDuration / newCount);
-  log(`Assigned ${newCount} researcher${newCount > 1 ? 's' : ''} to ${tech.name}. Research will take ~${duration} month${duration > 1 ? 's' : ''}.`);
+  const remaining = tech.baseDuration - (state.techProgress[techId] || 0);
+  log(`Assigned a researcher to ${tech.name} (${newCount} on project, ~${Math.ceil(remaining / newCount)} mo remaining).`);
   renderResearchTree();
+}
+
+function unassignResearcherFromTech(techId) {
+  const tech = techTree.find(t => t.id === techId);
+  const assigned = state.researchAssignments[techId] || 0;
+  if (!tech || assigned <= 0) return;
+  state.researchAssignments[techId] = assigned - 1;
+  log(`Pulled a researcher off ${tech.name}. Progress is retained.`);
+  renderResearchTree();
+}
+
+// Every unresearched prerequisite of techId, deepest-first so each tech comes
+// before the ones that depend on it. Skips already-unlocked prereqs.
+function collectPrereqChain(techId, acc = []) {
+  const tech = techById(techId);
+  if (!tech) return acc;
+  for (const reqId of tech.requires) {
+    if (state.unlockedTechs.includes(reqId) || acc.includes(reqId)) continue;
+    collectPrereqChain(reqId, acc);
+    if (!acc.includes(reqId)) acc.push(reqId);
+  }
+  return acc;
+}
+
+function toggleQueueTech(techId) {
+  const tech = techById(techId);
+  if (!tech || state.unlockedTechs.includes(techId)) return;
+  const position = state.researchQueue.indexOf(techId);
+  if (position >= 0) {
+    state.researchQueue.splice(position, 1);
+    log(`${tech.name} removed from the research queue.`);
+  } else {
+    // Queue the tech plus every prerequisite it still needs, prereqs first,
+    // skipping ones already unlocked, queued, or actively being researched.
+    const chain = [...collectPrereqChain(techId), techId];
+    const added = chain.filter(id =>
+      !state.unlockedTechs.includes(id) &&
+      !state.researchQueue.includes(id) &&
+      !(state.researchAssignments[id] > 0)
+    );
+    state.researchQueue.push(...added);
+    const prereqCount = added.length - (added.includes(techId) ? 1 : 0);
+    if (prereqCount > 0) {
+      log(`${tech.name} queued with ${prereqCount} prerequisite tech${prereqCount > 1 ? "s" : ""}. Idle researchers work through them in order.`);
+    } else {
+      log(`${tech.name} queued (#${state.researchQueue.length}). Idle researchers start it once prerequisites are done.`);
+    }
+  }
+  renderResearchTree();
+}
+
+function processResearchQueue() {
+  state.researchQueue = state.researchQueue.filter(id => !state.unlockedTechs.includes(id));
+  let idle = state.staff.researchers - totalAssignedResearchers();
+  for (const techId of [...state.researchQueue]) {
+    if (idle <= 0) break;
+    const tech = techById(techId);
+    if (!tech || !prereqsMet(tech)) continue;
+    state.researchAssignments[techId] = (state.researchAssignments[techId] || 0) + idle;
+    state.researchQueue = state.researchQueue.filter(id => id !== techId);
+    log(`Queued research started: ${tech.name} with ${idle} researcher${idle > 1 ? "s" : ""}.`);
+    idle = 0;
+  }
 }
 
 function acceptContract(index) {
@@ -918,33 +1168,121 @@ function checkAutoSelect() {
   }
 }
 
-function refreshSiliconContracts() {
-  while (siliconContractDeck.length < 3) {
-    const names = [
-      ["Trading Signal ASIC", "microsecond risk scoring"],
-      ["Robotics Control SoC", "factory motion planning"],
-      ["Climate Solver Tile", "weather simulation kernels"],
-      ["Fraud Graph Engine", "large-scale graph traversal"],
-      ["Medical Imaging Chip", "3D scan reconstruction"]
-    ];
-    const picked = names[Math.floor(Math.random() * names.length)];
-    const cacheNeed = 0.25 + Math.random() * 0.7;
-    const memoryNeed = 0.25 + Math.random() * 0.7;
-    const aiNeed = Math.random();
-    const threshold = Math.round((64 + state.month * 4 + Math.random() * 90) * (1 + state.staff.sales * 0.03));
-    siliconContractDeck.push({
-      name: picked[0],
-      application: picked[1],
-      minPerf: threshold,
-      pay: Math.round(threshold * (5200 + Math.random() * 1800)),
-      penalty: Math.round(threshold * (950 + Math.random() * 650)),
-      goodwill: Math.round(Math.random() * 4 - 1),
-      cacheNeed,
-      memoryNeed,
-      aiNeed
-    });
+function generateSiliconOffer() {
+  if (state.siliconOffers.length >= 3) return;
+  if (Math.random() > 0.3 + state.staff.sales * 0.06) return;
+  const [company, application] = siliconCompanyPool[Math.floor(Math.random() * siliconCompanyPool.length)];
+  if (state.siliconOffers.some(o => o.company === company) || state.activeSilicon.some(c => c.company === company)) return;
+  // Every customer cares about exactly one application benchmark — the
+  // chip only has to score well on that workload, nothing else.
+  const requirement = {
+    type: "benchmark",
+    benchmark: benchmarkNames[Math.floor(Math.random() * benchmarkNames.length)],
+    minScore: 40 + Math.round(Math.random() * 45)
+  };
+  const deadline = 55 + Math.round(Math.random() * 45);
+  const difficulty = requirement.minScore / 60;
+  const pay = Math.round((420000 + Math.random() * 280000) * (0.8 + difficulty * 0.8) * (1 + state.staff.sales * 0.03));
+  const offer = {
+    id: `sil_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    company,
+    application,
+    requirement,
+    pay,
+    penalty: Math.round(pay * 0.22),
+    goodwill: Math.round(Math.random() * 3 - 1),
+    cacheNeed: 0.25 + Math.random() * 0.7,
+    memoryNeed: 0.25 + Math.random() * 0.7,
+    aiNeed: Math.random(),
+    requestedTech: Math.random() < 0.4 ? techTree[Math.floor(Math.random() * techTree.length)].id : null,
+    deadline,
+    expiresIn: 3 + Math.floor(Math.random() * 3)
+  };
+  state.siliconOffers.push(offer);
+  log(`${company} approached you for custom silicon (${application}): ${requirementLabel(requirement)}, ${money.format(pay)} on delivery, ${deadline}-month window.`);
+}
+
+function tickSiliconMarket() {
+  for (const offer of [...state.siliconOffers]) {
+    offer.expiresIn -= 1;
+    if (offer.expiresIn <= 0) {
+      state.siliconOffers = state.siliconOffers.filter(o => o !== offer);
+      log(`${offer.company} withdrew their custom silicon request.`);
+    }
   }
-  renderSiliconContracts();
+  for (const contract of [...state.activeSilicon]) {
+    contract.monthsLeft -= 1;
+    if (contract.monthsLeft <= 0) {
+      state.activeSilicon = state.activeSilicon.filter(c => c !== contract);
+      state.cash -= contract.penalty;
+      if (state.chipProject && state.chipProject.contractId === contract.id) state.chipProject = null;
+      log(`${contract.company} deadline missed — contract cancelled. Penalty: ${money.format(contract.penalty)}.`);
+    }
+  }
+  generateSiliconOffer();
+}
+
+function acceptSiliconOffer(offerId) {
+  const index = state.siliconOffers.findIndex(o => o.id === offerId);
+  if (index < 0) return;
+  const offer = state.siliconOffers.splice(index, 1)[0];
+  state.activeSilicon.push({ ...offer, monthsLeft: offer.deadline, attempts: 0, lastResult: null });
+  log(`Signed with ${offer.company}: deliver ${requirementLabel(offer.requirement)} within ${offer.deadline} months.`);
+  updateUI();
+}
+
+function declineSiliconOffer(offerId) {
+  const index = state.siliconOffers.findIndex(o => o.id === offerId);
+  if (index < 0) return;
+  const offer = state.siliconOffers.splice(index, 1)[0];
+  log(`Declined ${offer.company}'s request.`);
+  updateUI();
+}
+
+function startSiliconIteration(contractId) {
+  const contract = state.activeSilicon.find(c => c.id === contractId);
+  if (!contract) return;
+  if (state.chipProject) return log("R&D is busy with another chip program.");
+  computeChip();
+  const upfront = Math.round(state.chip.cost * 0.18);
+  if (state.cash < upfront) return log(`Starting this iteration needs ${money.format(upfront)} up front.`);
+  if (state.chip.months > contract.monthsLeft) {
+    log(`Warning: this design needs ${state.chip.months} months but only ${contract.monthsLeft} remain on the ${contract.company} deal.`);
+  }
+  state.cash -= upfront;
+  contract.attempts += 1;
+  state.chipProject = {
+    name: `${contract.company} custom`,
+    monthsTotal: state.chip.months,
+    monthsLeft: state.chip.months,
+    monthlyCost: Math.max(10000, Math.round((state.chip.cost - upfront) / state.chip.months)),
+    spent: upfront,
+    type: "iteration",
+    contractId: contract.id,
+    specs: activeChipSpecs()
+  };
+  log(`Design iteration #${contract.attempts} started for ${contract.company}: ${state.chip.months} months, ${money.format(state.chip.cost)} NRE.`);
+  updateUI();
+}
+
+function evaluateAgainstRequirement(chipLike, contract, isNewDesign) {
+  const requirement = contract.requirement;
+  if (requirement.type === "benchmark") {
+    const base = benchmarkScores(chipLike).find(b => b.name === requirement.benchmark).score;
+    const rolled = Math.round(base * (0.92 + Math.random() * 0.16));
+    return {
+      success: rolled >= requirement.minScore,
+      resultText: `${requirement.benchmark} scored ${rolled} (needs ${requirement.minScore})`
+    };
+  }
+  const perf = isNewDesign
+    ? rollDesignedPerformance(chipLike, contract)
+    : chipLike.perf * (0.94 + Math.random() * 0.12);
+  return {
+    success: perf >= requirement.minPerf,
+    resultText: `${perf.toFixed(0)} PFLOPS/node (needs ${requirement.minPerf})`,
+    perf
+  };
 }
 
 function takeLoan(amount, payment) {
@@ -978,14 +1316,38 @@ function nextMonth() {
     if (state.chipProject.monthsLeft <= 0) {
       const specs = state.chipProject.specs;
       const finalPerf = rollDesignedPerformance(specs, state.chipProject.contract);
-      if (state.chipProject.type === "customer") {
-        const contract = state.chipProject.contract;
-        if (finalPerf >= contract.minPerf) {
-          state.cash += contract.pay;
-          log(`${contract.name} delivered at ${finalPerf.toFixed(0)} PFLOPS/node. Customer paid ${money.format(contract.pay)}.`);
+      if (state.chipProject.type === "iteration") {
+        const contract = state.activeSilicon.find(c => c.id === state.chipProject.contractId);
+        if (!contract) {
+          log(`${state.chipProject.name} finished, but the customer program had already ended.`);
         } else {
-          state.cash -= contract.penalty;
-          log(`${contract.name} missed target at ${finalPerf.toFixed(0)} PFLOPS/node. Penalty: ${money.format(contract.penalty)}.`);
+          const result = evaluateAgainstRequirement(specs, contract, true);
+          const hasRequestedTech = contract.requestedTech && state.unlockedTechs.includes(contract.requestedTech);
+          if (result.success) {
+            const payout = hasRequestedTech ? Math.round(contract.pay * 1.15) : contract.pay;
+            state.cash += payout;
+            state.activeSilicon = state.activeSilicon.filter(c => c !== contract);
+            state.chipCatalog.push({
+              name: `${contract.company} ASIC`,
+              perf: result.perf || specs.perf,
+              heat: specs.heat,
+              reliability: Math.min(99, specs.reliability + state.staff.researchers),
+              clock: specs.clock,
+              cores: specs.cores,
+              cache: specs.cache,
+              memory: specs.memory,
+              node: specs.node,
+              ai: specs.ai,
+              ecc: specs.ecc,
+              optimizedPower: specs.optimizedPower,
+              cache3d: specs.cache3d,
+              optical: specs.optical
+            });
+            log(`${contract.company} accepted the design — ${result.resultText}. Paid ${money.format(payout)}${hasRequestedTech ? " (includes licensed-tech premium)" : ""}.`);
+          } else {
+            contract.lastResult = result.resultText;
+            log(`Iteration for ${contract.company} missed spec: ${result.resultText}. ${contract.monthsLeft} months left to iterate.`);
+          }
         }
       } else {
         state.activeChip = {
@@ -994,7 +1356,28 @@ function nextMonth() {
           heat: specs.heat,
           reliability: Math.min(99, specs.reliability + state.staff.researchers)
         };
+        state.chipCatalog.push({
+          name: state.activeChip.name,
+          perf: finalPerf,
+          heat: specs.heat,
+          reliability: state.activeChip.reliability,
+          clock: specs.clock,
+          cores: specs.cores,
+          cache: specs.cache,
+          memory: specs.memory,
+          node: specs.node,
+          ai: specs.ai,
+          ecc: specs.ecc,
+          optimizedPower: specs.optimizedPower,
+          cache3d: specs.cache3d,
+          optical: specs.optical
+        });
         log(`${state.activeChip.name} taped out at ${finalPerf.toFixed(0)} PFLOPS/node and entered production.`);
+      }
+      const previousLevel = designExperienceLevel();
+      state.designExperience += 1;
+      if (designExperienceLevel() !== previousLevel) {
+        log(`Design team promoted to ${designExperienceLevel()} — performance estimates just got tighter.`);
       }
       state.chipProject = null;
     }
@@ -1025,15 +1408,18 @@ function nextMonth() {
   if (state.cash < -250000) {
     log("Bankruptcy warning: raise capital or sign higher-margin contracts.");
   }
-  recordFinancials(t.revenue, expenses, operatingPowerCost);
+  // On-demand subscribers rent whatever contracts left unclaimed this month
+  tickWholesale();
+  recordFinancials(t.revenue + state.wholesale.revenue, expenses, operatingPowerCost);
   refreshContracts();
-  refreshSiliconContracts();
+  tickSiliconMarket();
 
   // Research progress for assigned researchers
   computeResearchProgress();
 
-  // Sales team sells partial compute if contracts are insufficient
-  attemptPartialSales();
+  // Rival labs advance their own programs, then buyers shop your licensed tech
+  advanceRivals();
+  processLicensing();
 
   updateUI();
   redrawMap();
@@ -1076,23 +1462,194 @@ function renderContracts() {
   });
 }
 
-function renderSiliconContracts() {
-  const list = document.querySelector("#silicon-contract-list");
-  if (!list) return;
+// Application benchmark scores (0-100) derived from chip specs: clock-heavy
+// designs shine in gaming, core/memory-heavy ones in VMs, and so on.
+// Each benchmark is dominated by one or two stats and the blend runs through
+// a steep response curve, so design choices swing scores hard both ways —
+// a middle-of-the-road chip scores poorly everywhere, a specialised one
+// tops its target workload.
+function benchmarkScores(chip) {
+  const nodeScale = { 14: 0.72, 7: 1, 5: 1.18, 3: 1.34, 2: 1.5 }[chip.node] || 1;
+  const cacheVal = chip.cache * (chip.cache3d ? 1.5 : 1);
+  const n = {
+    clock: (chip.clock - 1.6) / 4.4,
+    cache: (cacheVal - 8) / 120,
+    cores: (chip.cores - 4) / 92,
+    memory: (chip.memory - 2) / 14,
+    ai: chip.ai ? 1 : 0,
+    ecc: chip.ecc ? 1 : 0,
+    node: (nodeScale - 0.72) / 0.62
+  };
+  const pct = value => Math.round(clamp(0.5 + (clamp(value, 0, 1) - 0.5) * 2, 0.02, 1) * 100);
+  return [
+    { name: "Gaming", score: pct(n.clock * 0.62 + n.cache * 0.2 + n.node * 0.13 + n.ai * 0.05) },
+    { name: "Virtual machines", score: pct(n.cores * 0.6 + n.memory * 0.25 + n.ecc * 0.15) },
+    { name: "AI inference", score: pct(n.ai * 0.5 + n.memory * 0.22 + n.cache * 0.16 + n.node * 0.12) },
+    { name: "Databases", score: pct(n.memory * 0.45 + n.cache * 0.3 + n.ecc * 0.25) },
+    { name: "Scientific HPC", score: pct(n.cores * 0.45 + n.clock * 0.3 + n.memory * 0.25) },
+    { name: "Video rendering", score: pct(n.cores * 0.5 + n.cache * 0.28 + n.clock * 0.22) }
+  ];
+}
+
+// targets: optional { benchmarkName: neededScore } — draws a threshold marker
+// on those rows and turns them green once the design clears the bar, so you
+// can watch a customer's one benchmark cross its target as you tune sliders.
+function benchmarkRowsHtml(chip, targets = null) {
+  return benchmarkScores(chip).map(bench => {
+    const need = targets ? targets[bench.name] : undefined;
+    const targeted = need != null;
+    const met = targeted && bench.score >= need;
+    const rowClass = `bench-row${targeted ? " target" : ""}${met ? " met" : ""}`;
+    const marker = targeted ? `<span class="bench-target" style="left:${Math.min(100, need)}%"></span>` : "";
+    const needLabel = targeted ? ` <em>needs ${need}${met ? " ✓" : ""}</em>` : "";
+    return `
+    <div class="${rowClass}"><span>${bench.name}${needLabel}</span><div class="bench-track">${marker}<div class="bench-fill" style="width:${bench.score}%"></div></div><strong>${bench.score}</strong></div>
+  `;
+  }).join("");
+}
+
+// Benchmarks any current customer (active program or open offer) cares about,
+// keyed to the highest score demanded across them.
+function designBenchmarkTargets() {
+  const targets = {};
+  const consider = deal => {
+    const req = deal.requirement;
+    if (req && req.type === "benchmark") targets[req.benchmark] = Math.max(targets[req.benchmark] || 0, req.minScore);
+  };
+  state.activeSilicon.forEach(consider);
+  state.siliconOffers.forEach(consider);
+  return targets;
+}
+
+function chipContractScore(chip, contract) {
+  const margin = chip.perf / contract.requirement.minPerf;
+  const odds = clamp(0.65 + (margin - 1) * 4, 0.03, 0.96);
+  const cacheFit = clamp((chip.cache - 16) / 96, 0, 1);
+  const memoryFit = clamp((chip.memory - 4) / 12, 0, 1);
+  const aiFit = chip.ai ? contract.aiNeed : 1 - contract.aiNeed * 0.6;
+  const workloadFit = (cacheFit * contract.cacheNeed + memoryFit * contract.memoryNeed + aiFit) / (contract.cacheNeed + contract.memoryNeed + 1);
+  return { score: odds * (0.7 + workloadFit * 0.6), odds, workloadFit };
+}
+
+function bestChipIndexForContract(contract) {
+  let best = 0;
+  let bestScore = -Infinity;
+  state.chipCatalog.forEach((chip, index) => {
+    let score;
+    if (contract.requirement.type === "benchmark") {
+      score = benchmarkScores(chip).find(b => b.name === contract.requirement.benchmark).score / contract.requirement.minScore;
+    } else {
+      score = chipContractScore(chip, contract).score;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = index;
+    }
+  });
+  return best;
+}
+
+function chipMeetsRequirement(chip, requirement) {
+  if (requirement.type === "benchmark") {
+    return benchmarkScores(chip).find(b => b.name === requirement.benchmark).score >= requirement.minScore;
+  }
+  return chip.perf >= requirement.minPerf;
+}
+
+function deliverExistingChip(contractId, chipIndex) {
+  const contract = state.activeSilicon.find(c => c.id === contractId);
+  const chip = state.chipCatalog[chipIndex];
+  if (!contract || !chip) return;
+  const adaptationCost = Math.round(contract.pay * 0.12);
+  if (state.cash < adaptationCost) return log(`Adapting ${chip.name} for ${contract.company} needs ${money.format(adaptationCost)}.`);
+  state.cash -= adaptationCost;
+  contract.attempts += 1;
+  const hasRequestedTech = contract.requestedTech && state.unlockedTechs.includes(contract.requestedTech);
+  const result = evaluateAgainstRequirement(chip, contract, false);
+  if (result.success) {
+    const payout = hasRequestedTech ? Math.round(contract.pay * 1.15) : contract.pay;
+    state.cash += payout;
+    state.activeSilicon = state.activeSilicon.filter(c => c !== contract);
+    log(`${contract.company} accepted ${chip.name} — ${result.resultText}. Paid ${money.format(payout)}${hasRequestedTech ? " with licensed-tech premium" : ""}.`);
+  } else {
+    contract.lastResult = result.resultText;
+    log(`${chip.name} failed qualification for ${contract.company}: ${result.resultText}. ${contract.monthsLeft} months left to iterate.`);
+  }
+  updateUI();
+}
+
+// Readiness of the current CPU Lab design against a contract's requirement.
+function designReadiness(contract) {
+  const requirement = contract.requirement;
+  if (requirement.type === "benchmark") {
+    const score = benchmarkScores(state.chip).find(b => b.name === requirement.benchmark).score;
+    return `Current lab design: ${requirement.benchmark} ~${score} (needs ${requirement.minScore})`;
+  }
+  const profile = designOutcomeProfile(activeChipSpecs(), requirement.minPerf, contract);
+  return `Current lab design: expected ${profile.low.toFixed(0)}-${profile.high.toFixed(0)} PFLOPS (needs ${requirement.minPerf}), ${Math.round(profile.odds * 100)}% odds`;
+}
+
+function requestedTechLine(contract) {
+  const requestedTech = contract.requestedTech ? techById(contract.requestedTech) : null;
+  if (!requestedTech) return "";
+  const owned = state.unlockedTechs.includes(requestedTech.id);
+  return `<br>Requests ${requestedTech.name}: ${owned ? '<span class="req-owned">owned — +15% payout</span>' : '<span class="req-missing">not researched</span>'}`;
+}
+
+function renderSiliconMarket() {
+  const offerList = document.querySelector("#silicon-offer-list");
+  const activeList = document.querySelector("#silicon-active-list");
+  if (!offerList || !activeList) return;
   computeChip();
-  list.innerHTML = "";
-  siliconContractDeck.forEach((contract, index) => {
-    const profile = designOutcomeProfile(activeChipSpecs(), contract.minPerf, contract);
-    const canStart = !state.chipProject;
-    const likely = profile.odds >= 0.55;
+
+  offerList.innerHTML = "";
+  if (!state.siliconOffers.length) {
+    offerList.innerHTML = `<p class="tech-subtitle">No incoming requests right now — companies approach you as months pass. Sales staff attract more.</p>`;
+  }
+  state.siliconOffers.forEach(offer => {
     const item = document.createElement("article");
-    item.className = `contract ${likely && canStart ? "can-accept" : "blocked"}`;
+    item.className = "contract can-accept";
     item.innerHTML = `
-      <h3>${contract.name}</h3>
-      <p>${contract.application}<br>Minimum ${contract.minPerf} PFLOPS/node, expected ${profile.low.toFixed(0)}-${profile.high.toFixed(0)} PFLOPS/node<br>Fit ${Math.round(profile.workloadFit * 100)}%, ${money.format(contract.pay)} delivery fee, ${money.format(contract.penalty)} miss penalty, ${Math.round(profile.odds * 100)}% success odds</p>
-      <button data-silicon-contract="${index}" class="${canStart ? "accept-ready" : "accept-blocked"}">${canStart ? "Sign and start design" : "R&D busy"}</button>
+      <h3>${offer.company}</h3>
+      <p>${offer.application}${requestedTechLine(offer)}<br>Wants: ${requirementLabel(offer.requirement)}<br>${money.format(offer.pay)} on delivery, ${money.format(offer.penalty)} penalty if the ${offer.deadline}-month deadline slips<br><small>${designReadiness(offer)} • Offer expires in ${offer.expiresIn} mo</small></p>
+      <div class="deliver-row">
+        <button data-accept-offer="${offer.id}" class="accept-ready">Accept</button>
+        <button data-decline-offer="${offer.id}">Decline</button>
+      </div>
     `;
-    list.appendChild(item);
+    offerList.appendChild(item);
+  });
+
+  activeList.innerHTML = "";
+  if (!state.activeSilicon.length) {
+    activeList.innerHTML = `<p class="tech-subtitle">No active programs. Accept a request above, then iterate on designs until it passes.</p>`;
+  }
+  state.activeSilicon.forEach(contract => {
+    const iterating = state.chipProject && state.chipProject.contractId === contract.id;
+    const rdBusy = state.chipProject && !iterating;
+    const bestIndex = bestChipIndexForContract(contract);
+    if (contract.selectedChip == null) contract.selectedChip = bestIndex;
+    const chipOptions = state.chipCatalog.map((chip, chipIndex) =>
+      `<option value="${chipIndex}" ${chipIndex === contract.selectedChip ? "selected" : ""}>${chip.name}${chipMeetsRequirement(chip, contract.requirement) ? " ✓" : ""}${chipIndex === bestIndex ? " ★ best match" : ""}</option>`
+    ).join("");
+    const statusLine = iterating
+      ? `Iteration #${contract.attempts} in progress: ${state.chipProject.monthsLeft}/${state.chipProject.monthsTotal} months left`
+      : contract.lastResult
+        ? `Last attempt: ${contract.lastResult}`
+        : "No design attempt yet";
+    const urgent = contract.monthsLeft <= 12;
+    const item = document.createElement("article");
+    item.className = `contract ${urgent ? "blocked" : "can-accept"}`;
+    item.innerHTML = `
+      <h3>${contract.company}</h3>
+      <p>${contract.application}${requestedTechLine(contract)}<br>Target: ${requirementLabel(contract.requirement)} • ${money.format(contract.pay)} on delivery<br><strong>${contract.monthsLeft} months to deadline</strong> (${money.format(contract.penalty)} penalty)<br>${statusLine}<br><small>${designReadiness(contract)}</small></p>
+      <button data-start-iteration="${contract.id}" class="${iterating || rdBusy ? "accept-blocked" : "accept-ready"} wide" ${iterating || rdBusy ? "disabled" : ""}>${iterating ? "Iterating…" : rdBusy ? "R&D busy" : `Start design iteration (uses CPU Lab design, ~${state.chip.months} mo)`}</button>
+      <div class="deliver-row">
+        <select data-deliver-select="${contract.id}" aria-label="Existing chip design">${chipOptions}</select>
+        <button data-deliver="${contract.id}">Deliver existing (${money.format(Math.round(contract.pay * 0.12))})</button>
+      </div>
+    `;
+    activeList.appendChild(item);
   });
 }
 
@@ -1173,73 +1730,277 @@ function renderResearchTree() {
   const container = document.querySelector("#research-tree");
   if (!container) return;
 
-  let totalTimeReduction = 0;
-  state.unlockedTechs.forEach(techId => {
-    const tech = techTree.find(t => t.id === techId);
-    if (tech && tech.timeBonus > 0) totalTimeReduction += tech.timeBonus;
+  const bonuses = getResearchBonuses();
+  const idle = state.staff.researchers - totalAssignedResearchers();
+
+  const tiers = [];
+  techTree.forEach(tech => {
+    const tier = techTier(tech);
+    (tiers[tier] = tiers[tier] || []).push(tech);
   });
 
   container.innerHTML = "";
+  const tierNames = ["Foundations", "Programs", "Advanced programs", "Frontier", "Moonshots"];
 
-  const currentResearchers = state.staff.researchers;
+  tiers.forEach((techs, tierIndex) => {
+    const column = document.createElement("div");
+    column.className = "tech-tier";
+    column.innerHTML = `<div class="tier-label">${tierNames[tierIndex] || `Tier ${tierIndex + 1}`}</div>`;
 
-  techTree.forEach(tech => {
-    const isUnlocked = state.unlockedTechs.includes(tech.id);
-    const unlockedAfterMonth = tech.unlockAfter || 1;
+    techs.forEach(tech => {
+      const isUnlocked = state.unlockedTechs.includes(tech.id);
+      const available = prereqsMet(tech);
+      const assigned = state.researchAssignments[tech.id] || 0;
+      const progress = isUnlocked ? tech.baseDuration : Math.min(state.techProgress[tech.id] || 0, tech.baseDuration);
+      const percent = Math.round((progress / tech.baseDuration) * 100);
+      const queuePosition = state.researchQueue.indexOf(tech.id);
+      const lic = state.licensing[tech.id];
 
-    if (state.month < unlockedAfterMonth) return;
+      let statusText;
+      if (isUnlocked) statusText = lic && lic.enabled ? "Complete • licensed" : "Complete";
+      else if (assigned > 0) statusText = `${assigned} assigned • ${progress}/${tech.baseDuration}`;
+      else if (queuePosition >= 0) statusText = `Queued #${queuePosition + 1}`;
+      else if (!available) statusText = "Locked";
+      else statusText = progress > 0 ? `Paused • ${progress}/${tech.baseDuration}` : "Available";
 
-    const assigned = state.researchAssignments[tech.id] || 0;
-    const duration = Math.ceil(tech.baseDuration / (assigned + 1)); // +1 because we're showing what it would take with one more
+      const node = document.createElement("div");
+      node.className = `tech-node${isUnlocked ? " unlocked" : ""}${!available && !isUnlocked ? " locked" : ""}${queuePosition >= 0 ? " queued" : ""}${state.selectedTech === tech.id ? " selected" : ""}`;
+      node.dataset.techSelect = tech.id;
+      const queueButton = isUnlocked
+        ? ""
+        : `<button class="node-queue" data-queue="${tech.id}" title="${queuePosition >= 0 ? "Remove from research queue" : "Add to research queue"}">${queuePosition >= 0 ? `Queued #${queuePosition + 1} ✕` : "+ Queue"}</button>`;
+      node.innerHTML = `
+        <div class="node-name">${tech.name}</div>
+        <div class="mini-progress"><div class="mini-fill" style="width:${percent}%"></div></div>
+        <div class="node-meta">${statusText}</div>
+        ${queueButton}
+      `;
+      column.appendChild(node);
+    });
 
-    const item = document.createElement("div");
-    item.className = "tech-item";
-
-    let actionBtn = "";
-    if (isUnlocked) {
-      actionBtn = `<button class="tech-installed" disabled>Researched</button>`;
-    } else if (assigned >= currentResearchers) {
-      actionBtn = `<button disabled>All researchers busy</button>`;
-    } else {
-      const nextCount = assigned + 1;
-      const nextDuration = Math.ceil(tech.baseDuration / nextCount);
-      actionBtn = `<button data-tech="${tech.id}" class="assign-researcher">Assign Researcher<br><span>${nextDuration} mo duration</span></button>`;
-    }
-
-    // Show progress if researcher is assigned
-    let progressInfo = "";
-    if (assigned > 0) {
-      const currentProgress = state.techProgress[tech.id] || 0;
-      const totalRequired = Math.ceil(tech.baseDuration / assigned);
-      const percent = Math.min(100, Math.round((currentProgress / totalRequired) * 100));
-      progressInfo = `<div class="research-progress">Progress: ${percent}% (${assigned} researcher${assigned > 1 ? 's' : ''})</div>`;
-    }
-
-    item.innerHTML = `
-      <div class="tech-header">
-        <strong>${tech.name}</strong>
-        <span class="category ${tech.category}">${tech.category}</span>
-      </div>
-      <div class="tech-benefit">${tech.desc}</div>
-      <div class="research-info">Base duration: ${tech.baseDuration} months (scales with researchers)</div>
-      <div class="tech-actions">
-        ${actionBtn}
-      </div>
-    `;
-
-    container.appendChild(item);
+    container.appendChild(column);
   });
 
+  document.querySelector("#idle-researchers").textContent = idle;
   document.querySelector("#tech-count").textContent = state.unlockedTechs.length;
-  const efficiencyPct = Math.round(totalTimeReduction * 100);
-  document.querySelector("#rd-efficiency").textContent = `${efficiencyPct}% faster`;
+  document.querySelector("#rd-efficiency").textContent = `${Math.round(bonuses.timeReduction * 100)}% faster`;
+  document.querySelector("#license-income").textContent = money.format(state.licenseIncome);
+  document.querySelector("#queue-count").textContent = state.researchQueue.length;
+  renderTechDetail();
+  renderRivals();
+  const modal = document.querySelector("#research-modal");
+  if (modal && !modal.classList.contains("hidden")) drawTreeLines();
+}
+
+function renderTechDetail() {
+  const box = document.querySelector("#tech-detail");
+  if (!box) return;
+  const tech = state.selectedTech ? techById(state.selectedTech) : null;
+  if (!tech) {
+    box.innerHTML = `<p class="detail-hint">Click a technology in the tree to see its dependencies, staffing, and licensing.</p>`;
+    return;
+  }
+
+  const isUnlocked = state.unlockedTechs.includes(tech.id);
+  const available = prereqsMet(tech);
+  const assigned = state.researchAssignments[tech.id] || 0;
+  const idle = state.staff.researchers - totalAssignedResearchers();
+  const progress = isUnlocked ? tech.baseDuration : Math.min(state.techProgress[tech.id] || 0, tech.baseDuration);
+  const percent = Math.round((progress / tech.baseDuration) * 100);
+  const remaining = tech.baseDuration - progress;
+  const queuePosition = state.researchQueue.indexOf(tech.id);
+
+  const requiresLine = tech.requires.length
+    ? tech.requires.map(id => {
+        const req = techById(id);
+        return `<span class="${state.unlockedTechs.includes(id) ? "req-owned" : "req-missing"}">${req.name}</span>`;
+      }).join(", ")
+    : "None — foundational tech";
+  const dependents = techTree.filter(t => t.requires.includes(tech.id)).map(t => t.name).join(", ") || "Nothing further";
+
+  let statusLine;
+  if (isUnlocked) statusLine = "Research complete";
+  else if (assigned > 0) statusLine = `${assigned} researcher${assigned > 1 ? "s" : ""} assigned • ~${Math.ceil(remaining / assigned)} months left`;
+  else if (progress > 0) statusLine = "Paused — progress kept";
+  else if (!available) statusLine = "Locked — finish prerequisites or queue it";
+  else statusLine = "Not started";
+
+  let controls = "";
+  if (isUnlocked) {
+    const lic = state.licensing[tech.id] || (state.licensing[tech.id] = { enabled: false, price: techValue(tech) });
+    controls = `
+      <div class="license-row">
+        <label class="check"><input type="checkbox" data-license-toggle="${tech.id}" ${lic.enabled ? "checked" : ""}> License out</label>
+        <input type="number" data-license-price="${tech.id}" value="${lic.price}" min="10000" step="10000" ${lic.enabled ? "" : "disabled"} aria-label="License price">
+      </div>`;
+  } else {
+    if (available) {
+      controls = `
+        <div class="assign-controls">
+          <button data-tech-remove="${tech.id}" ${assigned <= 0 ? "disabled" : ""} aria-label="Remove researcher">−</button>
+          <span class="assign-count">${assigned} assigned</span>
+          <button data-tech-add="${tech.id}" ${idle <= 0 ? "disabled" : ""} aria-label="Assign researcher">+</button>
+        </div>`;
+    }
+    controls += `<button data-queue="${tech.id}" class="queue-btn">${queuePosition >= 0 ? `Queued #${queuePosition + 1} — remove from queue` : "Add to queue"}</button>`;
+  }
+
+  box.innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-info">
+        <div class="tech-header">
+          <strong>${tech.name}</strong>
+          <span class="category ${tech.category}">${tech.category}</span>
+        </div>
+        <div class="tech-benefit">${tech.desc}</div>
+        <div class="requires-line">Requires: ${requiresLine}</div>
+        <div class="requires-line">Unlocks: ${dependents}</div>
+      </div>
+      <div class="detail-controls">
+        <div class="research-info">${statusLine}</div>
+        <div class="research-info">${progress}/${tech.baseDuration} researcher-months (${percent}%)</div>
+        <div class="progress-track"><div class="progress-fill${isUnlocked ? " done" : ""}" style="width:${percent}%"></div></div>
+        ${controls}
+      </div>
+    </div>
+  `;
+}
+
+function drawTreeLines() {
+  const canvas = document.querySelector(".tree-canvas");
+  const svg = document.querySelector("#tree-lines");
+  if (!canvas || !svg) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  if (canvasRect.width === 0) return;
+  svg.setAttribute("width", canvas.scrollWidth);
+  svg.setAttribute("height", canvas.scrollHeight);
+  let paths = "";
+  techTree.forEach(tech => {
+    const toEl = canvas.querySelector(`[data-tech-select="${tech.id}"]`);
+    if (!toEl) return;
+    const toRect = toEl.getBoundingClientRect();
+    tech.requires.forEach(reqId => {
+      const fromEl = canvas.querySelector(`[data-tech-select="${reqId}"]`);
+      if (!fromEl) return;
+      const fromRect = fromEl.getBoundingClientRect();
+      const x1 = fromRect.right - canvasRect.left;
+      const y1 = fromRect.top + fromRect.height / 2 - canvasRect.top;
+      const x2 = toRect.left - canvasRect.left;
+      const y2 = toRect.top + toRect.height / 2 - canvasRect.top;
+      const midX = (x1 + x2) / 2;
+      const owned = state.unlockedTechs.includes(reqId);
+      const highlighted = state.selectedTech === tech.id || state.selectedTech === reqId;
+      const stroke = highlighted ? "rgba(84,167,215,0.9)" : owned ? "rgba(98,199,107,0.5)" : "rgba(156,168,162,0.28)";
+      paths += `<path d="M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}" fill="none" stroke="${stroke}" stroke-width="${highlighted ? 2 : 1.5}"/>`;
+    });
+  });
+  svg.innerHTML = paths;
+}
+
+function openResearchModal() {
+  document.querySelector("#research-modal").classList.remove("hidden");
+  renderResearchTree();
+}
+
+function closeResearchModal() {
+  document.querySelector("#research-modal").classList.add("hidden");
+}
+
+function renderRivals() {
+  const list = document.querySelector("#rival-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!state.rivals.length) {
+    list.innerHTML = `<p class="tech-subtitle">No rival labs are operating right now.</p>`;
+    return;
+  }
+  state.rivals.forEach(rival => {
+    const price = rivalAskPrice(rival);
+    const currentTech = techTree.find(t => t.id === rival.current);
+    const currentProgress = currentTech ? Math.min(rival.progress[rival.current] || 0, currentTech.baseDuration) : 0;
+    const percent = currentTech ? Math.round((currentProgress / currentTech.baseDuration) * 100) : 0;
+    const completedNames = rival.completed
+      .map(id => { const t = techTree.find(tech => tech.id === id); return t ? t.name : null; })
+      .filter(Boolean).join(", ") || "None yet";
+    const canAfford = state.cash >= price;
+    const item = document.createElement("div");
+    item.className = "tech-item rival";
+    item.innerHTML = `
+      <div class="tech-header">
+        <strong>${rival.name}</strong>
+        <span class="category">${rival.researchers} researchers</span>
+      </div>
+      <div class="tech-benefit">Completed: ${completedNames}</div>
+      ${currentTech ? `
+        <div class="research-info">Working on ${currentTech.name} • ${currentProgress}/${currentTech.baseDuration} researcher-months</div>
+        <div class="progress-track"><div class="progress-fill rival-fill" style="width:${percent}%"></div></div>
+      ` : `<div class="research-info">No active project</div>`}
+      <button data-buy-rival="${rival.id}" class="${canAfford ? "accept-ready" : "accept-blocked"} wide">Acquire for ${money.format(price)}</button>
+    `;
+    list.appendChild(item);
+  });
+}
+
+function renderChipCatalog() {
+  const list = document.querySelector("#chip-catalog");
+  if (!list) return;
+  list.innerHTML = "";
+  [...state.chipCatalog].reverse().forEach(chip => {
+    const item = document.createElement("article");
+    item.className = "catalog-chip";
+    item.innerHTML = `
+      <div class="tech-header"><strong>${chip.name}</strong><span class="category">${chip.node} nm</span></div>
+      <div class="chip-specs">${Math.round(chip.perf)} PFLOPS/node • ${chip.heat.toFixed(2)} MW/node • ${Math.round(chip.reliability)}% reliable<br>
+      ${chip.cores} cores @ ${chip.clock.toFixed(1)} GHz • ${chip.cache} MB cache • ${chip.memory} mem channels${chip.ai ? " • AI accel" : ""}${chip.ecc ? " • ECC" : ""}</div>
+      <div class="benchmarks">${benchmarkRowsHtml(chip)}</div>
+    `;
+    list.appendChild(item);
+  });
+}
+
+function renderDesignBenchmarks() {
+  const box = document.querySelector("#design-benchmarks");
+  if (!box) return;
+  box.innerHTML = benchmarkRowsHtml(state.chip, designBenchmarkTargets());
+}
+
+// Reflects unlocked physical techs into the CPU Lab controls: widens sliders,
+// adds process nodes, and injects on-chip feature checkboxes. Idempotent —
+// safe to call on every UI refresh; existing controls are left untouched.
+function applyDesignUnlocks() {
+  const nodeSelect = document.querySelector("#node");
+  const featureBox = document.querySelector("#tech-design-options");
+  for (const techId of state.unlockedTechs) {
+    const tech = techById(techId);
+    if (!tech || !tech.design) continue;
+    for (const mod of tech.design) {
+      if (mod.type === "slider") {
+        const slider = document.querySelector(`#${mod.target}`);
+        if (slider && Number(slider.max) < mod.max) slider.max = mod.max;
+      } else if (mod.type === "node") {
+        if (nodeSelect && !nodeSelect.querySelector(`option[value="${mod.value}"]`)) {
+          const opt = document.createElement("option");
+          opt.value = mod.value;
+          opt.textContent = mod.label;
+          nodeSelect.appendChild(opt);
+        }
+      } else if (mod.type === "checkbox") {
+        if (featureBox && !featureBox.querySelector(`[data-chip-flag="${mod.key}"]`)) {
+          const label = document.createElement("label");
+          label.className = "check";
+          label.innerHTML = `<input type="checkbox" data-chip-flag="${mod.key}"${state.chip[mod.key] ? " checked" : ""}> ${mod.label} <span class="tech-tag">${tech.name}</span>`;
+          featureBox.appendChild(label);
+        }
+      }
+    }
+  }
 }
 
 function updateUI() {
   computeChip();
   const t = totals();
   document.querySelector("#cash").textContent = money.format(state.cash);
-  document.querySelector("#revenue").textContent = `${money.format(t.revenue)}/mo`;
+  document.querySelector("#revenue").textContent = `${money.format(t.revenue + state.wholesale.revenue)}/mo`;
   document.querySelector("#debt").textContent = money.format(state.debt);
   document.querySelector("#power").textContent = formatMw(t.power);
   document.querySelector("#goodwill").textContent = `${t.goodwill}%`;
@@ -1248,6 +2009,14 @@ function updateUI() {
   document.querySelector("#used-capacity").textContent = `${t.used} PFLOPS`;
   document.querySelector("#available-compute").textContent = `${Math.max(0, Math.round(t.capacity - t.used))} PFLOPS`;
   document.querySelector("#contract-capacity").textContent = `${Math.round(t.capacity)} PFLOPS`;
+  const appeal = wholesaleAppeal();
+  document.querySelector("#wholesale-price-label").textContent = `${money.format(state.wholesale.price)}`;
+  const priceSlider = document.querySelector("#wholesale-price");
+  if (document.activeElement !== priceSlider) priceSlider.value = state.wholesale.price;
+  document.querySelector("#wholesale-market").textContent = `~${money.format(wholesaleMarketPrice())}`;
+  document.querySelector("#wholesale-demand").textContent = appeal > 0.75 ? "Strong" : appeal > 0.45 ? "Moderate" : appeal > 0.15 ? "Weak" : appeal > 0 ? "Minimal" : "None";
+  document.querySelector("#wholesale-sold").textContent = `${state.wholesale.sold} PFLOPS`;
+  document.querySelector("#wholesale-income").textContent = `${money.format(state.wholesale.revenue)}/mo`;
   document.querySelector("#payroll").textContent = `${money.format(t.payroll)}/mo`;
   document.querySelector("#loan-payments").textContent = `${money.format(state.loanPayments)}/mo`;
   document.querySelector("#chip-rd").textContent = `${money.format(t.chipRd)}/mo`;
@@ -1268,6 +2037,8 @@ function updateUI() {
   document.querySelector("#chip-perf").textContent = `${state.chip.perf.toFixed(1)} PFLOPS/node`;
   const chipProfile = designOutcomeProfile(activeChipSpecs());
   document.querySelector("#chip-range").textContent = `${chipProfile.low.toFixed(0)}-${chipProfile.high.toFixed(0)} PFLOPS/node`;
+  const experienceLabel = `${designExperienceLevel()} (${state.designExperience} chip${state.designExperience === 1 ? "" : "s"} • estimates ${Math.round(designEstimateAccuracy() * 100)}% tighter)`;
+  document.querySelector("#chip-experience").textContent = experienceLabel;
   document.querySelector("#chip-heat").textContent = `${state.chip.heat.toFixed(2)} MW/node`;
   document.querySelector("#chip-reliability").textContent = `${Math.round(state.chip.reliability)}%`;
   document.querySelector("#chip-cost").textContent = money.format(state.chip.cost);
@@ -1282,30 +2053,44 @@ function updateUI() {
   const siliconProfile = chipProfile;
   document.querySelector("#silicon-design-estimate").textContent = `${state.chip.perf.toFixed(0)} PFLOPS/node`;
   document.querySelector("#silicon-outcome-range").textContent = `${siliconProfile.low.toFixed(0)}-${siliconProfile.high.toFixed(0)} PFLOPS/node`;
-  document.querySelector("#silicon-success-odds").textContent = siliconContractDeck.length
-    ? `${Math.round(designOutcomeProfile(activeChipSpecs(), siliconContractDeck[0].minPerf, siliconContractDeck[0]).odds * 100)}% vs first deal`
-    : "No deals";
   document.querySelector("#silicon-engineers").textContent = state.staff.researchers;
-  renderSiliconContracts();
+  document.querySelector("#silicon-experience").textContent = experienceLabel;
+  applyDesignUnlocks();
+  renderSiliconMarket();
+  renderChipCatalog();
+  renderDesignBenchmarks();
+  renderResearchTree();
   renderFinanceChart();
 }
 
 function bind() {
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
+      if (tab.dataset.tab === "research") {
+        openResearchModal();
+        return;
+      }
       document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
       document.querySelectorAll(".panel").forEach(item => item.classList.remove("active"));
       tab.classList.add("active");
       document.querySelector(`#panel-${tab.dataset.tab}`).classList.add("active");
       if (tab.dataset.tab === "reports") renderFinanceChart();
-      if (tab.dataset.tab === "research") renderResearchTree();
     });
   });
 
-  const researchTab = document.querySelector('[data-tab="research"]');
-  if (researchTab) {
-    researchTab.addEventListener("click", () => renderResearchTree());
-  }
+  document.querySelector("#research-close").addEventListener("click", closeResearchModal);
+  document.querySelector("#research-modal").addEventListener("click", event => {
+    if (event.target === event.currentTarget) closeResearchModal();
+  });
+
+  window.addEventListener("keydown", event => {
+    if (event.key === "F5") {
+      event.preventDefault();
+      nextMonth();
+      return;
+    }
+    if (event.key === "Escape") closeResearchModal();
+  });
 
   document.querySelectorAll(".subtab").forEach(tab => {
     tab.addEventListener("click", () => {
@@ -1321,10 +2106,11 @@ function bind() {
   document.querySelector("#build-large").addEventListener("click", () => build("large"));
   document.querySelector("#upgrade-site").addEventListener("click", upgradeSite);
   document.querySelector("#prototype-chip").addEventListener("click", prototypeChip);
-  document.querySelector("#hire-research").addEventListener("click", () => hire("researchers"));
-  document.querySelector("#hire-ops").addEventListener("click", () => hire("ops"));
-  document.querySelector("#hire-community").addEventListener("click", () => hire("community"));
-  document.querySelector("#hire-sales").addEventListener("click", () => hire("sales"));
+  document.querySelector("#hire-research").addEventListener("click", () => hire("researchers", hireQty()));
+  document.querySelector("#hire-ops").addEventListener("click", () => hire("ops", hireQty()));
+  document.querySelector("#hire-community").addEventListener("click", () => hire("community", hireQty()));
+  document.querySelector("#hire-sales").addEventListener("click", () => hire("sales", hireQty()));
+  document.querySelector("#hire-qty").addEventListener("input", renderHireCosts);
   document.querySelector("#contract-rule-toggle").addEventListener("change", event => {
     if (event.target.checked) {
       state.contractRule = "revenue_per_pflop";
@@ -1346,14 +2132,70 @@ function bind() {
     const button = event.target.closest("button[data-contract]");
     if (button) acceptContract(Number(button.dataset.contract));
   });
-  document.querySelector("#silicon-contract-list").addEventListener("click", event => {
-    const button = event.target.closest("button[data-silicon-contract]");
-    if (button) acceptSiliconContract(Number(button.dataset.siliconContract));
+  document.querySelector("#silicon-offer-list").addEventListener("click", event => {
+    const accept = event.target.closest("button[data-accept-offer]");
+    if (accept) return acceptSiliconOffer(accept.dataset.acceptOffer);
+    const decline = event.target.closest("button[data-decline-offer]");
+    if (decline) declineSiliconOffer(decline.dataset.declineOffer);
+  });
+  document.querySelector("#silicon-active-list").addEventListener("click", event => {
+    const iterate = event.target.closest("button[data-start-iteration]");
+    if (iterate) return startSiliconIteration(iterate.dataset.startIteration);
+    const deliver = event.target.closest("button[data-deliver]");
+    if (deliver) {
+      const contract = state.activeSilicon.find(c => c.id === deliver.dataset.deliver);
+      if (contract) deliverExistingChip(contract.id, contract.selectedChip != null ? contract.selectedChip : 0);
+    }
+  });
+  document.querySelector("#silicon-active-list").addEventListener("change", event => {
+    const select = event.target.closest("select[data-deliver-select]");
+    if (select) {
+      const contract = state.activeSilicon.find(c => c.id === select.dataset.deliverSelect);
+      if (contract) contract.selectedChip = Number(select.value);
+    }
   });
 
   document.querySelector("#research-tree").addEventListener("click", event => {
-    const button = event.target.closest("button[data-tech]");
-    if (button) assignResearchersToTech(button.dataset.tech);
+    const queue = event.target.closest("button[data-queue]");
+    if (queue) return toggleQueueTech(queue.dataset.queue);
+    const node = event.target.closest("[data-tech-select]");
+    if (node) {
+      state.selectedTech = node.dataset.techSelect;
+      renderResearchTree();
+    }
+  });
+  document.querySelector("#tech-detail").addEventListener("click", event => {
+    const add = event.target.closest("button[data-tech-add]");
+    if (add) return assignResearchersToTech(add.dataset.techAdd);
+    const remove = event.target.closest("button[data-tech-remove]");
+    if (remove) return unassignResearcherFromTech(remove.dataset.techRemove);
+    const queue = event.target.closest("button[data-queue]");
+    if (queue) toggleQueueTech(queue.dataset.queue);
+  });
+  document.querySelector("#tech-detail").addEventListener("change", event => {
+    const toggle = event.target.closest("input[data-license-toggle]");
+    if (toggle) {
+      const tech = techTree.find(t => t.id === toggle.dataset.licenseToggle);
+      const lic = state.licensing[toggle.dataset.licenseToggle] || (state.licensing[toggle.dataset.licenseToggle] = { enabled: false, price: tech ? techValue(tech) : 100000 });
+      lic.enabled = toggle.checked;
+      log(lic.enabled ? `${tech.name} is now available for licensing at ${money.format(lic.price)}.` : `${tech.name} licensing withdrawn.`);
+      renderResearchTree();
+      return;
+    }
+    const price = event.target.closest("input[data-license-price]");
+    if (price) {
+      const lic = state.licensing[price.dataset.licensePrice];
+      if (lic) lic.price = Math.max(10000, Math.round(Number(price.value) || 0));
+    }
+  });
+  document.querySelector("#rival-list").addEventListener("click", event => {
+    const buy = event.target.closest("button[data-buy-rival]");
+    if (buy) acquireRival(buy.dataset.buyRival);
+  });
+
+  document.querySelector("#wholesale-price").addEventListener("input", event => {
+    state.wholesale.price = Math.max(0, Math.round(Number(event.target.value) || 0));
+    updateUI();
   });
 
   for (const id of ["clock", "voltage", "cache", "cores", "memory"]) {
@@ -1375,15 +2217,26 @@ function bind() {
     state.chip.ecc = event.target.checked;
     updateUI();
   });
+  document.querySelector("#tech-design-options").addEventListener("change", event => {
+    const cb = event.target.closest("input[data-chip-flag]");
+    if (!cb) return;
+    state.chip[cb.dataset.chipFlag] = cb.checked;
+    updateUI();
+    redrawMap();
+  });
 
-  window.addEventListener("resize", renderFinanceChart);
+  window.addEventListener("resize", () => {
+    renderFinanceChart();
+    const modal = document.querySelector("#research-modal");
+    if (modal && !modal.classList.contains("hidden")) drawTreeLines();
+  });
 }
 
 bind();
 computeChip();
 recordFinancials(0, 0, 0);
 refreshContracts();
-refreshSiliconContracts();
+renderHireCosts();
 log("Seed funding secured. Pick a parcel and start building.");
 updateUI();
 bootGame();

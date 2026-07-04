@@ -4,7 +4,17 @@
       "Bash(awk NR==611 *)",
       "Bash(node -c src/game.js)",
       "Bash(python3 -m http.server 8000)",
-      "Bash(php -S localhost:8000)"
+      "Bash(php -S localhost:8000)",
+      "Skill(run)",
+      "Bash(node server.mjs)",
+      "Bash(curl -sD - -o /dev/null http://localhost:5173/)",
+      "Bash(node --check src/game.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(command -v playwright chromium-cli)",
+      "Bash(npx --no-install playwright --version)",
+      "Read(//c/Users/chris/AppData/Local/Temp/claude/C--Users-chris-Documents-DataCenterTycoon-Datacenter-Tycoon/faf3718e-2b1b-40d2-bae7-8f3d42e6bca4/scratchpad/**)",
+      "Bash(python -)",
+      "Bash(node -e ' *)"
     ]
   }
 }

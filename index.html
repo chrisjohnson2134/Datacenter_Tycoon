@@ -18,10 +18,10 @@
         </div>
         <div class="metric"><span>Cash</span><strong id="cash">$0</strong></div>
         <div class="metric"><span>Revenue</span><strong id="revenue">$0/mo</strong></div>
-        <div class="metric"><span>Debt</span><strong id="debt">$0</strong></div>
+        <div class="metric combined-metric"><span>Debt</span><strong id="debt">$0</strong><span>Payroll</span><strong id="payroll">$0/mo</strong></div>
         <div class="metric"><span>Power</span><strong id="power">0 MW</strong></div>
         <div class="metric"><span>Goodwill</span><strong id="goodwill">100%</strong></div>
-        <div class="metric month-card"><span>Month</span><strong id="month">1</strong><button id="next-month-hud">Run next month</button></div>
+        <div class="metric month-card"><span>Month</span><strong id="month">1</strong><button id="next-month-hud" title="Hotkey: F5">Run next month (F5)</button></div>
       </section>
 
       <section id="workspace">
@@ -82,26 +82,38 @@
             </label>
             <label class="check"><input id="ai-accel" type="checkbox"> AI accelerator</label>
             <label class="check"><input id="ecc" type="checkbox" checked> ECC reliability</label>
+            <div id="tech-design-options" class="tech-design-options"></div>
+            <h3 class="section-title">Projected benchmarks</h3>
+            <p class="tech-subtitle">Live scores by workload as you tune the design. A marker shows the score any current customer needs — the row turns green when you clear it.</p>
+            <div id="design-benchmarks" class="benchmarks"></div>
             <button id="prototype-chip" class="wide">Start chip development</button>
             <div class="readout">
               <span>Active chip</span><strong id="active-chip">Gen 0</strong>
               <span>Estimate</span><strong id="chip-perf">0 PFLOPS</strong>
               <span>Outcome range</span><strong id="chip-range">0-0 PFLOPS</strong>
+              <span>Design experience</span><strong id="chip-experience">Novice</strong>
               <span>Node power</span><strong id="chip-heat">0 MW</strong>
               <span>Reliability</span><strong id="chip-reliability">0%</strong>
               <span>NRE budget</span><strong id="chip-cost">$0</strong>
               <span>Timeline</span><strong id="chip-time">0 mo</strong>
               <span>R&D status</span><strong id="chip-status">Idle</strong>
             </div>
+            <h3 class="section-title">Chip catalog</h3>
+            <p class="tech-subtitle">Every chip you have designed, newest first. These can be offered to custom silicon customers.</p>
+            <div id="chip-catalog" class="tech-list"></div>
           </section>
 
           <section class="panel" id="panel-staff">
             <h2>Hiring & Settings</h2>
+            <label>Hire quantity <strong id="hire-qty-label">1</strong>
+              <input id="hire-qty" type="range" min="1" max="50" value="1" step="1">
+            </label>
+            <p class="tech-subtitle">Each button hires this many at once for their combined signing cost.</p>
             <div class="button-grid">
-              <button id="hire-research">Chip researcher<br><span>$18k/mo</span></button>
-              <button id="hire-ops">Ops manager<br><span>$14k/mo</span></button>
-              <button id="hire-community">Community liaison<br><span>$12k/mo</span></button>
-              <button id="hire-sales">Contract sales<br><span>$15k/mo</span></button>
+              <button id="hire-research">Chip researcher<br><span class="hire-cost" data-role="researchers"></span></button>
+              <button id="hire-ops">Ops manager<br><span class="hire-cost" data-role="ops"></span></button>
+              <button id="hire-community">Community liaison<br><span class="hire-cost" data-role="community"></span></button>
+              <button id="hire-sales">Contract sales<br><span class="hire-cost" data-role="sales"></span></button>
             </div>
 
             <div class="readout">
@@ -129,16 +141,30 @@
               <span>Total capacity</span><strong id="contract-capacity">0 PFLOPS</strong>
             </div>
             <div id="contract-list"></div>
+            <h3 class="section-title">On-demand compute</h3>
+            <p class="tech-subtitle">Unclaimed PFLOPS rent out without a contract at your listed price, billed monthly like a subscription. Price below the market rate to fill capacity — overprice it and flops sit unsold.</p>
+            <label class="wholesale-price">Price per PFLOP/mo <strong id="wholesale-price-label">$950</strong>
+              <input id="wholesale-price" type="range" min="100" max="5000" step="50" value="950">
+            </label>
+            <div class="readout contract-capacity">
+              <span>Market rate</span><strong id="wholesale-market">$0</strong>
+              <span>Demand</span><strong id="wholesale-demand">—</strong>
+              <span>Subscribed</span><strong id="wholesale-sold">0 PFLOPS</strong>
+              <span>Income</span><strong id="wholesale-income">$0/mo</strong>
+            </div>
             </div>
             <div class="contract-page" id="contracts-silicon">
-              <p id="silicon-brief">Design an application-specific chip that clears a customer's minimum performance threshold.</p>
+              <p id="silicon-brief">Companies approach you with custom silicon requests — some want raw PFLOPS, others a specific benchmark. Accept a deal, tune a design in the CPU Lab, and iterate until it passes or the deadline runs out.</p>
               <div class="readout contract-capacity">
                 <span>Design estimate</span><strong id="silicon-design-estimate">0 PFLOPS</strong>
                 <span>Expected outcome</span><strong id="silicon-outcome-range">0-0 PFLOPS</strong>
-                <span>Success odds</span><strong id="silicon-success-odds">0%</strong>
                 <span>Engineers</span><strong id="silicon-engineers">0</strong>
+                <span>Design experience</span><strong id="silicon-experience">Novice</strong>
               </div>
-              <div id="silicon-contract-list"></div>
+              <h3 class="section-title">Incoming requests</h3>
+              <div id="silicon-offer-list"></div>
+              <h3 class="section-title">Active programs</h3>
+              <div id="silicon-active-list"></div>
             </div>
           </section>
 
@@ -168,22 +194,42 @@
             </div>
           </section>
 
-          <section class="panel" id="panel-research">
-            <h2>Research & Development</h2>
-            <p class="tech-subtitle">Assign researchers to technologies. Research time is proportional to tech complexity divided by researcher count.</p>
-
-            <div id="research-tree" class="tech-list"></div>
-
-            <div class="readout">
-              <span>Unlocked techs</span><strong id="tech-count">0</strong>
-              <span>R&D efficiency</span><strong id="rd-efficiency">0%</strong>
-            </div>
-          </section>
         </aside>
       </section>
 
       <section id="event-log" aria-label="Event log"></section>
     </main>
+
+    <div id="research-modal" class="modal hidden" role="dialog" aria-label="Research and development">
+      <div class="modal-content">
+        <div class="modal-head">
+          <h2>Research & Development</h2>
+          <button id="research-close" aria-label="Close research">Close ✕</button>
+        </div>
+        <div class="readout research-readout">
+          <span>Idle researchers</span><strong id="idle-researchers">0</strong>
+          <span>Unlocked techs</span><strong id="tech-count">0</strong>
+          <span>R&D efficiency</span><strong id="rd-efficiency">0%</strong>
+          <span>License income</span><strong id="license-income">$0</strong>
+          <span>Queued</span><strong id="queue-count">0</strong>
+        </div>
+
+        <div id="tree-scroll" class="tree-scroll">
+          <div class="tree-canvas">
+            <svg id="tree-lines" aria-hidden="true"></svg>
+            <div id="research-tree" class="tech-tree"></div>
+          </div>
+        </div>
+
+        <h3 class="section-title">Rival labs</h3>
+        <p class="tech-subtitle">Rivals run their own research programs. Acquiring one grants their finished tech, in-progress work, and their researchers — sometimes cheaper than researching it yourself.</p>
+        <div id="rival-list" class="rival-grid"></div>
+
+        <div id="tech-detail" class="tech-detail">
+          <p class="detail-hint">Click a technology in the tree to see its dependencies, staffing, and licensing.</p>
+        </div>
+      </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
     <script src="src/game.js"></script>
