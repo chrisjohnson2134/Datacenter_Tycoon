@@ -795,15 +795,15 @@ select {
 
 .tech-detail {
   position: sticky;
-  bottom: 0;
+  top: 0;
   z-index: 2;
-  margin-top: 14px;
+  margin: 14px 0;
   padding: 12px 14px;
   min-height: 96px;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .detail-hint {
