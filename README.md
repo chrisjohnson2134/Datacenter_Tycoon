@@ -1,36 +1,50 @@
-# Datacenter Tycoon
+# 🏢 Datacenter Tycoon
 
-A playable browser prototype for a data center tycoon game. The demo includes:
+A playable browser prototype for a data center tycoon game where you build and manage your own data center empire.
 
-- Regional map parcel selection and data center placement
-- CPU design sliders for clock speed, cache, cores, AI acceleration, and ECC
-- Staff hiring for chip research, operations, community, and sales
-- Contract selection with capacity requirements and monthly revenue
-- Loans, repayment, payroll, operating costs, and monthly simulation
-- Power draw and community goodwill pressure that can trigger fines or shutdown risk
+## 🎮 Features
 
-## Run
+- **Regional Map** — Select parcels and place your data center strategically
+- **CPU Design** — Customize with sliders for clock speed, cache, cores, AI acceleration, and ECC
+- **Staff Management** — Hire specialists in chip research, operations, community, and sales
+- **Contract Selection** — Choose contracts with varying capacity requirements and monthly revenue
+- **Financial Simulation** — Manage loans, repayment, payroll, and operating costs
+- **Environmental Pressure** — Balance power draw and community goodwill to avoid fines or shutdown
 
-Start the included Node server:
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js installed
+
+### Run the Game
+
+Start the Node server:
 
 ```powershell
 npm.cmd start
 ```
 
-Then open `http://localhost:5173`.
+Then open your browser to `http://localhost:5173`
 
-If port `5173` is already in use, pick another port:
+**Using a different port?** If `5173` is already in use:
 
 ```powershell
 $env:PORT=5174; npm.cmd start
 ```
-Choose where to build and how powerful of a datacenter to make.
-<img width="897" height="542" alt="image" src="https://github.com/user-attachments/assets/1346d660-a43a-43be-9062-f078f08b97a5" />
 
-Design a CPU to beat your competitors.
-<img width="750" height="774" alt="image" src="https://github.com/user-attachments/assets/3dfa57c7-4675-4bc4-8b3b-a1391bc143f0" />
+Then navigate to `http://localhost:5174`
 
-Research new designs to stay on the bleeding edge.
-<img width="2418" height="906" alt="image" src="https://github.com/user-attachments/assets/3aa2cab1-f7d3-416f-8a3c-a57495d66389" />
+## 📸 Gameplay Preview
 
+### Choose Your Location & Build Your Datacenter
+![Datacenter Tycoon - Map & Placement](https://github.com/user-attachments/assets/1346d660-a43a-43be-9062-f078f08b97a5)
 
+### Design a Powerful CPU to Beat Your Competitors
+![Datacenter Tycoon - CPU Design](https://github.com/user-attachments/assets/3dfa57c7-4675-4bc4-8b3b-a1391bc143f0)
+
+### Research New Designs to Stay on the Bleeding Edge
+![Datacenter Tycoon - Research](https://github.com/user-attachments/assets/3aa2cab1-f7d3-416f-8a3c-a57495d66389)
+
+---
+
+**Start building your data center empire today!** 💻⚡
